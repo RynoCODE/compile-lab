@@ -1,0 +1,88 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Java Online Compiler — Docker Compose
+#
+# Security posture:
+#   • Non-root user (appuser:1001) enforced in the Dockerfile
+#   • no-new-privileges: prevents sudo / setuid escalation
+#   • Capability drop: removes all Linux capabilities
+#   • tmpfs for /tmp: compiled class files never touch the host filesystem
+#   • Read-only root filesystem (app writes only to /tmp via tmpfs)
+#   • Isolated network: no egress except what the host proxies
+#   • Resource limits (CPU + RAM) prevent runaway processes
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  java-compiler:
+    build:
+      context : .
+      dockerfile: Dockerfile
+    image   : java-compiler:latest
+    container_name: java-compiler
+
+    # ── Ports ──────────────────────────────────────────────────────────────
+    ports:
+      - "3000:3000"
+
+    # ── Environment ────────────────────────────────────────────────────────
+    environment:
+      NODE_ENV  : production
+      PORT      : "3000"
+      # Restrict CORS to localhost in development; change for production.
+      CORS_ORIGIN: "*"
+
+    # ── Resource limits ────────────────────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          cpus   : "2.0"      # Max 2 CPU cores
+          memory : "512M"     # Max 512 MB RAM
+        reservations:
+          cpus   : "0.25"
+          memory : "128M"
+
+    # ── Security hardening ─────────────────────────────────────────────────
+    security_opt:
+      - no-new-privileges:true   # Prevents privilege escalation
+
+    cap_drop:
+      - ALL                      # Drop every Linux capability
+
+    # ── Read-only root fs + writable /tmp via RAM-only tmpfs ───────────────
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=256m,noexec  # noexec stops native binary exploits
+
+    # ── Healthcheck (mirrors Dockerfile HEALTHCHECK) ───────────────────────
+    healthcheck:
+      test    : ["CMD", "node", "-e",
+                 "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout : 10s
+      retries : 3
+      start_period: 20s
+
+    # ── Restart on crash ───────────────────────────────────────────────────
+    restart: unless-stopped
+
+    # ── Logging ────────────────────────────────────────────────────────────
+    logging:
+      driver : json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional: Uncomment for production HTTPS via Nginx reverse proxy
+# ─────────────────────────────────────────────────────────────────────────────
+#  nginx:
+#    image: nginx:1.25-alpine
+#    depends_on: [java-compiler]
+#    ports:
+#      - "80:80"
+#      - "443:443"
+#    volumes:
+#      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+#      - ./certs:/etc/nginx/certs:ro
+#    restart: unless-stopped

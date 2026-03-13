@@ -1,0 +1,42 @@
+# ── Version control ──────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Node.js ───────────────────────────────────────────────────
+**/node_modules
+**/npm-debug.log*
+**/.npm
+
+# ── Test artifacts (never ship tests to production image) ─────
+**/tests
+**/__tests__
+**/*.test.js
+**/*.spec.js
+**/coverage
+**/.nyc_output
+**/jest.config.js
+
+# ── Development tooling ───────────────────────────────────────
+**/.env
+**/.env.*
+!**/.env.example
+**/nodemon.json
+**/.nodemonignore
+
+# ── IDE / OS ──────────────────────────────────────────────────
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Docker files themselves (avoid recursive copy) ────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Docs ──────────────────────────────────────────────────────
+*.md
+LICENSE

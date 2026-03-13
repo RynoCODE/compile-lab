@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Online Java compiler — write, compile, and run Java code in your browser." />
-  <title>Java Compiler Online – Run Java Code in Browser</title>
+  <meta name="description" content="Online multi-language compiler — write, compile, and run Java, Python, C, and C++ code in your browser." />
+  <title>Online Code Compiler — Java, Python, C, C++</title>
 
   <!-- Preconnect to CDN for faster Monaco load -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
@@ -25,49 +25,71 @@
   <header class="header">
 
     <!-- Brand -->
-    <a class="header__brand" href="/" title="Java Compiler Online">
-      <!-- Java "Duke" inspired minimal icon -->
+    <a class="header__brand" href="/" title="Online Code Compiler">
       <svg width="28" height="28" viewBox="0 0 28 28" fill="none"
            xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <rect width="28" height="28" rx="6" fill="#4caf50"/>
         <text x="14" y="20" font-family="monospace" font-weight="700"
-              font-size="14" fill="white" text-anchor="middle">J</text>
+              font-size="13" fill="white" text-anchor="middle">&lt;/&gt;</text>
       </svg>
-      <span>JavaRun</span>
-      <span class="header__lang-badge">Java</span>
+      <span>CodeRun</span>
     </a>
 
-    <!-- Actions: examples, theme toggle, run -->
+    <!-- Actions -->
     <div class="header__actions">
 
+      <!-- ── Language selector (primary control) ─────────────────── -->
+      <select id="lang-select" class="lang-select"
+              title="Select programming language"
+              aria-label="Select programming language">
+        <option value="java">Java</option>
+        <option value="python">Python 3</option>
+        <option value="c">C (gcc)</option>
+        <option value="cpp">C++ (g++)</option>
+      </select>
+
+      <!-- ── Example snippets (language-aware) ───────────────────── -->
       <select id="example-select" class="example-select"
               title="Load a code example" aria-label="Load code example">
         <option value="">Load Example…</option>
-        <option value="hello">Hello World</option>
-        <option value="fibonacci">Fibonacci Series</option>
-        <option value="scanner">Read User Input</option>
-        <option value="bubbleSort">Bubble Sort</option>
-        <option value="factorial">Factorial (Recursion)</option>
-        <option value="infiniteLoop">Infinite Loop (timeout demo)</option>
+        <!-- Java examples -->
+        <option value="java_hello"       data-lang="java">Hello World</option>
+        <option value="java_fibonacci"   data-lang="java">Fibonacci Series</option>
+        <option value="java_scanner"     data-lang="java">Read User Input</option>
+        <option value="java_bubbleSort"  data-lang="java">Bubble Sort</option>
+        <option value="java_factorial"   data-lang="java">Factorial (Recursion)</option>
+        <option value="java_infinite"    data-lang="java">Infinite Loop (demo)</option>
+        <!-- Python examples -->
+        <option value="py_hello"         data-lang="python">Hello World</option>
+        <option value="py_fibonacci"     data-lang="python">Fibonacci Series</option>
+        <option value="py_input"         data-lang="python">Read User Input</option>
+        <option value="py_infinite"      data-lang="python">Infinite Loop (demo)</option>
+        <!-- C examples -->
+        <option value="c_hello"          data-lang="c">Hello World</option>
+        <option value="c_scanf"          data-lang="c">Read User Input</option>
+        <option value="c_infinite"       data-lang="c">Infinite Loop (demo)</option>
+        <!-- C++ examples -->
+        <option value="cpp_hello"        data-lang="cpp">Hello World</option>
+        <option value="cpp_cin"          data-lang="cpp">Read User Input</option>
+        <option value="cpp_infinite"     data-lang="cpp">Infinite Loop (demo)</option>
       </select>
 
+      <!-- ── Theme toggle ─────────────────────────────────────────── -->
       <button id="btn-theme" class="btn-icon" title="Switch to Light Theme"
               aria-label="Toggle colour theme">
-        <!-- Moon icon (default dark theme) -->
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2">
           <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
         </svg>
       </button>
 
+      <!-- ── Run button ────────────────────────────────────────────── -->
       <button id="btn-run" class="btn-run" title="Run (Ctrl+Enter)"
-              aria-label="Compile and run Java code">
-        <!-- Play icon -->
+              aria-label="Compile and run code">
         <svg class="btn-run__icon" width="14" height="14" viewBox="0 0 24 24"
              fill="currentColor" aria-hidden="true">
           <polygon points="5,3 19,12 5,21"/>
         </svg>
-        <!-- Spinner (shown while running) -->
         <div class="btn-run__spinner" aria-hidden="true"></div>
         <span>Run</span>
       </button>
@@ -85,7 +107,8 @@
              aria-label="Code editor">
 
       <div class="panel__header">
-        <span>Editor — Main.java</span>
+        <!-- Filename updates dynamically via JS when language changes -->
+        <span id="editor-filename">HelloWorld.java</span>
         <div class="panel__header-actions">
           <button id="btn-copy-code" class="panel__header-btn"
                   title="Copy source code" aria-label="Copy code">
@@ -95,7 +118,8 @@
       </div>
 
       <!-- Monaco Editor mounts here -->
-      <div id="monaco-editor" role="textbox" aria-label="Java source code editor"
+      <div id="monaco-editor" role="textbox"
+           aria-label="Source code editor"
            aria-multiline="true"></div>
 
     </section>
@@ -128,11 +152,11 @@
       <div id="output-terminal" class="output-terminal"
            role="log" aria-live="polite" aria-atomic="true">
         <span class="out-placeholder">
-          Click <strong>Run</strong> or press <kbd>Ctrl+Enter</kbd> to compile and execute your Java code.
+          Click <strong>Run</strong> or press <kbd>Ctrl+Enter</kbd> to compile and execute your code.
         </span>
       </div>
 
-      <!-- Stdin input (hidden by default, toggled by btn-toggle-stdin) -->
+      <!-- Stdin input (hidden by default) -->
       <div id="stdin-section" class="stdin-section" aria-hidden="true">
         <div class="stdin-section__header">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
@@ -144,7 +168,7 @@
         <textarea id="stdin-textarea"
                   placeholder="Enter program input here (one value per line)…"
                   spellcheck="false"
-                  aria-label="Standard input for the Java program"></textarea>
+                  aria-label="Standard input for the program"></textarea>
       </div>
 
     </section>
@@ -154,10 +178,11 @@
        STATUS BAR (footer)
   ═══════════════════════════════════════════════════════════════════ -->
   <footer class="footer" role="contentinfo">
+    <!-- Language indicator — text updated by JS -->
     <span class="footer__item" id="footer-lang">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="#4caf50"
            aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>
-      &nbsp;Java 17
+      &nbsp;<span id="footer-lang-text">Java 17</span>
     </span>
     <span class="footer__item" id="footer-pos" aria-live="polite">Ln 1, Col 1</span>
     <span class="footer__item" id="footer-status" aria-live="polite">
@@ -169,7 +194,7 @@
     </span>
   </footer>
 
-  <!-- App logic (loaded after DOM) -->
+  <!-- App logic -->
   <script src="/js/app.js" defer></script>
 
 </body>

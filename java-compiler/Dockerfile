@@ -19,38 +19,42 @@ RUN npm install --omit=dev --no-audit --no-fund
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2 — Final runtime image
 #   Base: eclipse-temurin (OpenJDK 17 LTS, Debian Jammy slim)
-#   We layer Node.js 18 on top so both `javac`/`java` and `node` are available.
+#   Layers on top: Node.js 18, Python 3, GCC (C), G++ (C++)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM eclipse-temurin:17-jdk-jammy AS runtime
 
-# ── Install Node.js 18 via NodeSource ──────────────────────────────────────
+# ── Install Node.js 18 + Python 3 + GCC + G++ ────────────────────────────────
+# All language runtimes are installed in a single RUN to minimise layers.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        curl ca-certificates \
+        python3 python3-pip \
+        gcc g++ && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     # Cleanup apt cache to shrink image
     apt-get purge -y --auto-remove curl && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Verify toolchain ────────────────────────────────────────────────────────
-RUN java -version && javac -version && node --version && npm --version
+# ── Verify the full toolchain ─────────────────────────────────────────────────
+RUN java -version && javac -version && \
+    node --version && npm --version && \
+    python3 --version && \
+    gcc --version && g++ --version
 
-# ── Create a non-root user for security ─────────────────────────────────────
+# ── Create a non-root user for security ──────────────────────────────────────
 RUN groupadd --gid 1001 appgroup && \
     useradd  --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
 
 WORKDIR /app
 
-# ── Copy production node_modules from stage 1 ───────────────────────────────
+# ── Copy production node_modules from stage 1 ────────────────────────────────
 COPY --from=deps /build/backend/node_modules ./backend/node_modules
 
-# ── Copy application source ──────────────────────────────────────────────────
+# ── Copy application source ───────────────────────────────────────────────────
 COPY backend/package.json     ./backend/package.json
 COPY backend/src               ./backend/src
 COPY frontend                  ./frontend
-
-# ── Directories the app writes to at runtime ─────────────────────────────────
-# /tmp is already world-writable on Debian; no extra setup needed.
 
 # ── Ownership → non-root user ─────────────────────────────────────────────────
 RUN chown -R appuser:appgroup /app

@@ -1,36 +1,38 @@
 'use strict';
 
-const express          = require('express');
-const rateLimit        = require('express-rate-limit');
-const { compileAndRun } = require('../compiler');
+const express                             = require('express');
+const rateLimit                           = require('express-rate-limit');
+const { compileAndRun, SUPPORTED_LANGUAGES } = require('../compiler');
 
 const router = express.Router();
 
-// ─── Rate limiter: max 15 compile requests per minute per IP ────────────────
+// ─── Rate limiter: max 15 compile requests per minute per IP ─────────────────
 const compileLimiter = rateLimit({
-  windowMs        : 60 * 1000, // 1 minute
-  max             : 15,
-  standardHeaders : true,
-  legacyHeaders   : false,
-  message         : {
+  windowMs       : 60 * 1000,
+  max            : 15,
+  standardHeaders: true,
+  legacyHeaders  : false,
+  message        : {
     success: false,
     error  : 'Too many requests. Please wait a moment before trying again.',
   },
 });
 
-// ─── POST /api/compile ───────────────────────────────────────────────────────
+// ─── POST /api/compile ────────────────────────────────────────────────────────
 /**
  * Body (JSON):
  *   sourceCode {string}  — required, max 50 KB
+ *   language   {string}  — optional, default "java"
+ *                          one of: java | python | c | cpp
  *   stdin      {string}  — optional, max 4 KB
  *
  * Response (JSON):
  *   { success, output, error, stage, executionTime }
  */
 router.post('/', compileLimiter, async (req, res) => {
-  const { sourceCode, stdin = '' } = req.body;
+  const { sourceCode, stdin = '', language = 'java' } = req.body;
 
-  // ── Input validation ──────────────────────────────────────────────────────
+  // ── sourceCode validation ─────────────────────────────────────────────────
   if (!sourceCode || typeof sourceCode !== 'string') {
     return res.status(400).json({
       success: false,
@@ -49,6 +51,17 @@ router.post('/', compileLimiter, async (req, res) => {
     });
   }
 
+  // ── language validation ───────────────────────────────────────────────────
+  if (typeof language !== 'string' || !SUPPORTED_LANGUAGES.includes(language)) {
+    return res.status(400).json({
+      success: false,
+      output : '',
+      error  : `Unsupported language: "${language}". Supported languages are: ${SUPPORTED_LANGUAGES.join(', ')}.`,
+      stage  : 'validation',
+    });
+  }
+
+  // ── stdin validation ──────────────────────────────────────────────────────
   if (typeof stdin !== 'string') {
     return res.status(400).json({
       success: false,
@@ -71,7 +84,7 @@ router.post('/', compileLimiter, async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const result = await compileAndRun(sourceCode, stdin);
+    const result        = await compileAndRun(sourceCode, stdin, language);
     const executionTime = Date.now() - startTime;
 
     return res.status(200).json({ ...result, executionTime });

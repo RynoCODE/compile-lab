@@ -1,6 +1,7 @@
 /* ============================================================
-   Java Compiler — Global styles
+   Multi-language Online Compiler — Global styles
    Design: Programiz-inspired split-screen IDE
+   Languages: Java · Python · C · C++
    ============================================================ */
 
 /* ── Reset & root ─────────────────────────────────────────── */
@@ -113,6 +114,22 @@ html, body {
   max-width    : 200px;
 }
 .example-select:hover { border-color: var(--accent); }
+
+/* Language selector — primary control, visually distinct */
+.lang-select {
+  background   : var(--bg-panel);
+  border       : 1.5px solid var(--accent);
+  color        : var(--text-primary);
+  font-size    : .85rem;
+  font-weight  : 600;
+  padding      : 6px 10px;
+  border-radius: var(--radius);
+  cursor       : pointer;
+  outline      : none;
+  min-width    : 120px;
+}
+.lang-select:hover  { background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel)); }
+.lang-select:focus  { box-shadow: 0 0 0 2px rgba(76,175,80,.35); }
 
 /* Icon button (theme toggle) */
 .btn-icon {

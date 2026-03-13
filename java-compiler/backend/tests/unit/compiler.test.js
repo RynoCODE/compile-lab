@@ -1,28 +1,54 @@
 'use strict';
 
 /**
- * Unit tests for compiler.js
+ * Unit tests for compiler.js — multi-language execution engine.
  *
- * These tests exercise the compileAndRun() engine directly (no HTTP).
- * They require a real JDK (`javac` / `java`) to be on PATH.
+ * These tests bypass HTTP and call compileAndRun() directly.
+ * All language toolchains must be available on PATH:
+ *   Java  → javac, java
+ *   Python → python3
+ *   C     → gcc
+ *   C++   → g++
  *
- * Covered scenarios:
+ * ─── Java (original suite — unchanged) ────────────────────────────────────
  *  1.  Hello World — successful compilation and execution
- *  2.  Syntax error — javac error messages returned, success=false
- *  3.  Runtime exception — execution error returned, success=false
- *  4.  Infinite loop — timeout after ≤5 s, success=false, stage='timeout'
- *  5.  Deep recursion (StackOverflow) — caught and reported
- *  6.  Scanner stdin — program reads from stdin correctly
- *  7.  Multi-class file — package-private inner class compiles fine
- *  8.  Arithmetic output — verifies println output
- *  9.  extractClassName helper — public/unnamed/main-hosting classes
- * 10.  Empty source — validation rejection
- * 11.  Missing class — validation rejection
+ *  2.  Syntax error — javac error messages returned
+ *  3.  Runtime exception — stderr captured
+ *  4.  Infinite loop — timeout after ≤5 s
+ *  5.  StackOverflow — deep recursion caught
+ *  6.  Scanner stdin — reads from stdin
+ *  7.  Multi-class file — package-private classes
+ *  8.  Arithmetic output — correct values
+ *  9.  Empty source — validation rejection
+ * 10.  No class found — validation rejection
+ * 11.  Null input — validation rejection
+ * 12.  Output-flood guard — output bounded
+ * ─── Python ────────────────────────────────────────────────────────────────
+ * 13. Hello World
+ * 14. Syntax error in Python
+ * 15. Runtime error (ZeroDivisionError)
+ * 16. Infinite loop — timeout
+ * 17. stdin → input() reads correctly
+ * ─── C ──────────────────────────────────────────────────────────────────────
+ * 18. Hello World
+ * 19. Compile error (missing semicolon)
+ * 20. Runtime error (segfault / abort)
+ * 21. Infinite loop — timeout
+ * 22. stdin → scanf reads correctly
+ * ─── C++ ────────────────────────────────────────────────────────────────────
+ * 23. Hello World
+ * 24. Compile error (bad syntax)
+ * 25. Runtime error (out-of-bounds via std::vector::at)
+ * 26. Infinite loop — timeout
+ * 27. stdin → cin reads correctly
+ * ─── extractClassName() helpers ────────────────────────────────────────────
  */
 
 const { compileAndRun, extractClassName } = require('../../src/compiler');
 
-// ─── extractClassName ─────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// extractClassName()
+// ═════════════════════════════════════════════════════════════════════════════
 
 describe('extractClassName()', () => {
   test('returns name from `public class Foo`', () => {
@@ -55,120 +81,99 @@ describe('extractClassName()', () => {
   });
 });
 
-// ─── compileAndRun() ──────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// JAVA
+// ═════════════════════════════════════════════════════════════════════════════
 
-describe('compileAndRun()', () => {
+describe('Java — compileAndRun()', () => {
 
-  // ── 1. Hello World ──────────────────────────────────────────────────────────
   test('1. compiles and runs Hello World successfully', async () => {
-    const source = `
+    const result = await compileAndRun(`
       public class HelloWorld {
           public static void main(String[] args) {
               System.out.println("Hello, World!");
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe('Hello, World!');
     expect(result.error).toBe('');
     expect(result.stage).toBe('execution');
   });
 
-  // ── 2. Syntax error ─────────────────────────────────────────────────────────
   test('2. returns compilation error for syntax mistake', async () => {
-    const source = `
+    const result = await compileAndRun(`
       public class SyntaxError {
           public static void main(String[] args) {
-              System.out.println("missing semicolon")   // <-- no semicolon
+              System.out.println("missing semicolon")
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(false);
     expect(result.stage).toBe('compilation');
     expect(result.error).toMatch(/error/i);
-    // Temp path should be stripped from error message
-    expect(result.error).not.toMatch(/java_compiler_/);
+    expect(result.error).not.toMatch(/compiler_java_/);
   });
 
-  // ── 3. Runtime exception ────────────────────────────────────────────────────
   test('3. captures runtime exception in stderr', async () => {
-    const source = `
+    const result = await compileAndRun(`
       public class RuntimeErr {
           public static void main(String[] args) {
               int[] arr = new int[3];
-              System.out.println(arr[10]); // ArrayIndexOutOfBoundsException
+              System.out.println(arr[10]);
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(false);
     expect(result.stage).toBe('execution');
     expect(result.error).toMatch(/ArrayIndexOutOfBoundsException/i);
   });
 
-  // ── 4. Infinite loop timeout ────────────────────────────────────────────────
   test('4. kills infinite loop and returns timeout error', async () => {
-    const source = `
+    const start  = Date.now();
+    const result = await compileAndRun(`
       public class InfiniteLoop {
           public static void main(String[] args) {
-              while (true) {
-                  // spin forever
-              }
+              while (true) {}
           }
       }
-    `;
-    const start  = Date.now();
-    const result = await compileAndRun(source);
-    const elapsed = Date.now() - start;
-
+    `);
     expect(result.success).toBe(false);
     expect(result.stage).toBe('timeout');
     expect(result.error).toMatch(/timed out/i);
-    // Should terminate well within 10 seconds
-    expect(elapsed).toBeLessThan(10_000);
-  }, 20_000); // generous Jest timeout for this test
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
 
-  // ── 5. Stack overflow ───────────────────────────────────────────────────────
   test('5. captures StackOverflowError', async () => {
-    const source = `
+    const result = await compileAndRun(`
       public class DeepRecursion {
           public static void recurse() { recurse(); }
           public static void main(String[] args) { recurse(); }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(false);
     expect(result.stage).toBe('execution');
     expect(result.error).toMatch(/StackOverflowError/i);
   });
 
-  // ── 6. Scanner stdin ────────────────────────────────────────────────────────
   test('6. reads from stdin and prints correct output', async () => {
-    const source = `
-      import java.util.Scanner;
+    const result = await compileAndRun(
+      `import java.util.Scanner;
       public class EchoName {
           public static void main(String[] args) {
               Scanner sc = new Scanner(System.in);
               String name = sc.nextLine();
               System.out.println("Hello, " + name + "!");
           }
-      }
-    `;
-    const result = await compileAndRun(source, 'Alice');
-
+      }`,
+      'Alice'
+    );
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe('Hello, Alice!');
   });
 
-  // ── 7. Multiple (package-private) classes in one file ───────────────────────
   test('7. compiles file with multiple package-private classes', async () => {
-    const source = `
+    const result = await compileAndRun(`
       class Helper {
           static String greet(String name) { return "Hi " + name; }
       }
@@ -177,16 +182,13 @@ describe('compileAndRun()', () => {
               System.out.println(Helper.greet("World"));
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe('Hi World');
   });
 
-  // ── 8. Arithmetic output ─────────────────────────────────────────────────────
   test('8. computes and prints correct arithmetic result', async () => {
-    const source = `
+    const result = await compileAndRun(`
       public class Arithmetic {
           public static void main(String[] args) {
               int a = 17, b = 5;
@@ -194,57 +196,231 @@ describe('compileAndRun()', () => {
               System.out.println(a + " * " + b + " = " + (a * b));
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
+    `);
     expect(result.success).toBe(true);
     expect(result.output).toContain('17 + 5 = 22');
     expect(result.output).toContain('17 * 5 = 85');
   });
 
-  // ── 9. Empty source ──────────────────────────────────────────────────────────
   test('9. rejects empty source code', async () => {
     const result = await compileAndRun('   ');
-
     expect(result.success).toBe(false);
     expect(result.stage).toBe('validation');
     expect(result.error).toMatch(/empty/i);
   });
 
-  // ── 10. No class found ───────────────────────────────────────────────────────
   test('10. rejects source with no class definition', async () => {
     const result = await compileAndRun('int x = 5 + 3;');
-
     expect(result.success).toBe(false);
     expect(result.stage).toBe('validation');
   });
 
-  // ── 11. Null / non-string input ──────────────────────────────────────────────
   test('11. rejects null source code', async () => {
     const result = await compileAndRun(null);
-
     expect(result.success).toBe(false);
     expect(result.stage).toBe('validation');
   });
 
-  // ── 12. Output-flood guard ────────────────────────────────────────────────────
-  test('12. terminates output-flooding program', async () => {
-    const source = `
+  test('12. terminates output-flooding program within bounds', async () => {
+    const result = await compileAndRun(`
       public class OutputFlood {
           public static void main(String[] args) {
-              // Print a 200-char line 100000 times → far exceeds 100 KB cap
               String line = "A".repeat(200);
-              for (int i = 0; i < 100_000; i++) {
-                  System.out.println(line);
-              }
+              for (int i = 0; i < 100_000; i++) System.out.println(line);
           }
       }
-    `;
-    const result = await compileAndRun(source);
-
-    // Either killed (timeout or output cap) or succeeded but output is capped
-    // The key assertion: server remains responsive and output is bounded
+    `);
     expect(result.output.length).toBeLessThanOrEqual(110_000);
   }, 20_000);
+});
 
+// ═════════════════════════════════════════════════════════════════════════════
+// PYTHON
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Python — compileAndRun()', () => {
+
+  test('13. runs Hello World successfully', async () => {
+    const result = await compileAndRun(
+      'print("Hello, World!")',
+      '',
+      'python'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, World!');
+    expect(result.stage).toBe('execution');
+  });
+
+  test('14. reports syntax error', async () => {
+    const result = await compileAndRun(
+      'def foo(\n  print("bad")',
+      '',
+      'python'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('execution'); // Python surfaces syntax errors at runtime
+    expect(result.error).toMatch(/SyntaxError/i);
+  });
+
+  test('15. captures ZeroDivisionError', async () => {
+    const result = await compileAndRun(
+      'x = 1 / 0',
+      '',
+      'python'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('execution');
+    expect(result.error).toMatch(/ZeroDivisionError/i);
+  });
+
+  test('16. kills Python infinite loop (timeout)', async () => {
+    const start  = Date.now();
+    const result = await compileAndRun(
+      'while True: pass',
+      '',
+      'python'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('timeout');
+    expect(result.error).toMatch(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+
+  test('17. reads from stdin via input()', async () => {
+    const result = await compileAndRun(
+      'name = input()\nprint(f"Hello, {name}!")',
+      'Bob',
+      'python'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, Bob!');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('C — compileAndRun()', () => {
+
+  test('18. compiles and runs Hello World successfully', async () => {
+    const result = await compileAndRun(
+      '#include <stdio.h>\nint main() { printf("Hello, World!\\n"); return 0; }',
+      '',
+      'c'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, World!');
+    expect(result.stage).toBe('execution');
+  });
+
+  test('19. returns compilation error for missing semicolon', async () => {
+    const result = await compileAndRun(
+      '#include <stdio.h>\nint main() { printf("oops") return 0; }',
+      '',
+      'c'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('compilation');
+    expect(result.error).toMatch(/error/i);
+    // Temp path must not leak
+    expect(result.error).not.toMatch(/compiler_c_/);
+  });
+
+  test('20. captures non-zero exit on abort / assertion failure', async () => {
+    const result = await compileAndRun(
+      '#include <assert.h>\nint main() { assert(0); return 0; }',
+      '',
+      'c'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('execution');
+  });
+
+  test('21. kills C infinite loop (timeout)', async () => {
+    const start  = Date.now();
+    const result = await compileAndRun(
+      '#include <stdio.h>\nint main() { while(1) {} return 0; }',
+      '',
+      'c'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('timeout');
+    expect(result.error).toMatch(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+
+  test('22. reads from stdin via scanf', async () => {
+    const result = await compileAndRun(
+      '#include <stdio.h>\nint main() { int n; scanf("%d", &n); printf("Square: %d\\n", n*n); return 0; }',
+      '9',
+      'c'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Square: 81');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C++
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('C++ — compileAndRun()', () => {
+
+  test('23. compiles and runs Hello World successfully', async () => {
+    const result = await compileAndRun(
+      '#include <iostream>\nint main() { std::cout << "Hello, World!" << std::endl; return 0; }',
+      '',
+      'cpp'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, World!');
+    expect(result.stage).toBe('execution');
+  });
+
+  test('24. returns compilation error for undeclared variable', async () => {
+    const result = await compileAndRun(
+      '#include <iostream>\nint main() { std::cout << undeclared; return 0; }',
+      '',
+      'cpp'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('compilation');
+    expect(result.error).toMatch(/error/i);
+    expect(result.error).not.toMatch(/compiler_cpp_/);
+  });
+
+  test('25. captures std::out_of_range (vector::at)', async () => {
+    const result = await compileAndRun(
+      '#include <iostream>\n#include <vector>\nint main() { std::vector<int> v = {1,2,3}; std::cout << v.at(99); return 0; }',
+      '',
+      'cpp'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('execution');
+    expect(result.error).toMatch(/out_of_range|terminate|abort/i);
+  });
+
+  test('26. kills C++ infinite loop (timeout)', async () => {
+    const start  = Date.now();
+    const result = await compileAndRun(
+      '#include <iostream>\nint main() { while(true) {} return 0; }',
+      '',
+      'cpp'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('timeout');
+    expect(result.error).toMatch(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+
+  test('27. reads from stdin via cin', async () => {
+    const result = await compileAndRun(
+      '#include <iostream>\n#include <string>\nint main() { std::string s; std::cin >> s; std::cout << "Hi, " << s << "!" << std::endl; return 0; }',
+      'Carol',
+      'cpp'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hi, Carol!');
+  });
 });

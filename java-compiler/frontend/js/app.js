@@ -1,11 +1,13 @@
 /**
- * app.js — Java Online Compiler frontend
+ * app.js — Multi-language Online Compiler frontend
  *
  * Responsibilities:
- *   - Bootstrap Monaco Editor with Java syntax highlighting + dark theme.
- *   - Load code examples into the editor.
- *   - POST to /api/compile and render stdout / stderr results.
- *   - Keyboard shortcut: Ctrl+Enter / Cmd+Enter → Run.
+ *   - Bootstrap Monaco Editor with per-language syntax highlighting.
+ *   - Language selector: switches Monaco mode, boilerplate, filename, footer.
+ *   - Example selector: language-filtered snippets.
+ *   - POST to /api/compile with { sourceCode, language, stdin }.
+ *   - Render stdout / stderr results with stage badges.
+ *   - Keyboard shortcut: Ctrl+Enter → Run, Ctrl+L → Clear.
  *   - Drag-to-resize panel splitter.
  *   - Dark / Light theme toggle.
  *   - Stdin toggle panel.
@@ -13,37 +15,48 @@
 
 'use strict';
 
-// ─── Example code snippets ──────────────────────────────────────────────────
+// ─── Language configuration ──────────────────────────────────────────────────
+// monacoId  : language identifier used by Monaco Editor
+// label     : display text in the footer
+// filename  : shown in the editor panel header
+// tabSize   : sensible default per language convention
+const LANG_CONFIG = {
+  java  : { monacoId: 'java',   label: 'Java 17',    filename: 'HelloWorld.java', tabSize: 4 },
+  python: { monacoId: 'python', label: 'Python 3',   filename: 'program.py',     tabSize: 4 },
+  c     : { monacoId: 'c',      label: 'C (gcc)',    filename: 'program.c',       tabSize: 4 },
+  cpp   : { monacoId: 'cpp',    label: 'C++ (g++)', filename: 'program.cpp',     tabSize: 4 },
+};
+
+// ─── Code examples (keyed by example ID, include data-lang) ─────────────────
 const EXAMPLES = {
-  hello: {
-    label : 'Hello World',
-    code  : `public class HelloWorld {
+  // ── Java ──────────────────────────────────────────────────────────────────
+  java_hello: {
+    lang : 'java',
+    code : `public class HelloWorld {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
     }
 }`,
   },
-
-  fibonacci: {
-    label : 'Fibonacci Series',
-    code  : `public class Fibonacci {
+  java_fibonacci: {
+    lang : 'java',
+    code : `public class Fibonacci {
     public static void main(String[] args) {
         int n = 10, a = 0, b = 1;
         System.out.print("Fibonacci: " + a + " " + b);
         for (int i = 2; i < n; i++) {
             int c = a + b;
             System.out.print(" " + c);
-            a = b;
-            b = c;
+            a = b; b = c;
         }
         System.out.println();
     }
 }`,
   },
-
-  scanner: {
-    label : 'Read User Input',
-    code  : `import java.util.Scanner;
+  java_scanner: {
+    lang : 'java',
+    stdin: 'Alice',
+    code : `import java.util.Scanner;
 
 public class ReadInput {
     public static void main(String[] args) {
@@ -54,12 +67,10 @@ public class ReadInput {
         sc.close();
     }
 }`,
-    stdin: 'Alice',
   },
-
-  bubbleSort: {
-    label : 'Bubble Sort',
-    code  : `import java.util.Arrays;
+  java_bubbleSort: {
+    lang : 'java',
+    code : `import java.util.Arrays;
 
 public class BubbleSort {
     static void bubbleSort(int[] arr) {
@@ -70,7 +81,6 @@ public class BubbleSort {
                     int tmp = arr[j]; arr[j] = arr[j+1]; arr[j+1] = tmp;
                 }
     }
-
     public static void main(String[] args) {
         int[] arr = {64, 34, 25, 12, 22, 11, 90};
         bubbleSort(arr);
@@ -78,35 +88,135 @@ public class BubbleSort {
     }
 }`,
   },
-
-  factorial: {
-    label : 'Factorial (Recursion)',
-    code  : `public class Factorial {
+  java_factorial: {
+    lang : 'java',
+    code : `public class Factorial {
     static long factorial(int n) {
         return (n <= 1) ? 1 : n * factorial(n - 1);
     }
-
     public static void main(String[] args) {
         for (int i = 0; i <= 12; i++)
             System.out.println(i + "! = " + factorial(i));
     }
 }`,
   },
-
-  infiniteLoop: {
-    label : 'Infinite Loop (timeout demo)',
-    code  : `public class InfiniteLoop {
+  java_infinite: {
+    lang : 'java',
+    code : `public class InfiniteLoop {
     public static void main(String[] args) {
         System.out.println("Starting infinite loop...");
-        while (true) {
-            // This will be killed after 5 seconds
-        }
+        while (true) { /* killed after 5 s */ }
     }
+}`,
+  },
+
+  // ── Python ────────────────────────────────────────────────────────────────
+  py_hello: {
+    lang : 'python',
+    code : `print("Hello, World!")`,
+  },
+  py_fibonacci: {
+    lang : 'python',
+    code : `a, b = 0, 1
+result = []
+for _ in range(10):
+    result.append(a)
+    a, b = b, a + b
+print("Fibonacci:", result)`,
+  },
+  py_input: {
+    lang : 'python',
+    stdin: 'Alice',
+    code : `name = input("Enter your name: ")
+print(f"Welcome, {name}!")`,
+  },
+  py_infinite: {
+    lang : 'python',
+    code : `print("Starting infinite loop...")
+while True:
+    pass  # killed after 5 s`,
+  },
+
+  // ── C ─────────────────────────────────────────────────────────────────────
+  c_hello: {
+    lang : 'c',
+    code : `#include <stdio.h>
+
+int main() {
+    printf("Hello, World!\\n");
+    return 0;
+}`,
+  },
+  c_scanf: {
+    lang : 'c',
+    stdin: '7',
+    code : `#include <stdio.h>
+
+int main() {
+    int n;
+    printf("Enter a number: ");
+    scanf("%d", &n);
+    printf("Square of %d = %d\\n", n, n * n);
+    return 0;
+}`,
+  },
+  c_infinite: {
+    lang : 'c',
+    code : `#include <stdio.h>
+
+int main() {
+    printf("Starting infinite loop...\\n");
+    while (1) { /* killed after 5 s */ }
+    return 0;
+}`,
+  },
+
+  // ── C++ ───────────────────────────────────────────────────────────────────
+  cpp_hello: {
+    lang : 'cpp',
+    code : `#include <iostream>
+
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+    return 0;
+}`,
+  },
+  cpp_cin: {
+    lang : 'cpp',
+    stdin: 'Alice',
+    code : `#include <iostream>
+#include <string>
+
+int main() {
+    std::string name;
+    std::cout << "Enter your name: ";
+    std::getline(std::cin, name);
+    std::cout << "Welcome, " << name << "!" << std::endl;
+    return 0;
+}`,
+  },
+  cpp_infinite: {
+    lang : 'cpp',
+    code : `#include <iostream>
+
+int main() {
+    std::cout << "Starting infinite loop..." << std::endl;
+    while (true) { /* killed after 5 s */ }
+    return 0;
 }`,
   },
 };
 
-// ─── DOM references ─────────────────────────────────────────────────────────
+// ── Default boilerplate per language (shown when switching) ──────────────────
+const BOILERPLATES = {
+  java  : EXAMPLES.java_hello.code,
+  python: EXAMPLES.py_hello.code,
+  c     : EXAMPLES.c_hello.code,
+  cpp   : EXAMPLES.cpp_hello.code,
+};
+
+// ─── DOM references ──────────────────────────────────────────────────────────
+const $langSel     = document.getElementById('lang-select');
 const $btnRun      = document.getElementById('btn-run');
 const $btnTheme    = document.getElementById('btn-theme');
 const $btnClear    = document.getElementById('btn-clear-output');
@@ -116,63 +226,90 @@ const $exampleSel  = document.getElementById('example-select');
 const $outputTerm  = document.getElementById('output-terminal');
 const $stdinSection= document.getElementById('stdin-section');
 const $stdinArea   = document.getElementById('stdin-textarea');
-const $footerLang  = document.getElementById('footer-lang');
+const $footerLangTxt = document.getElementById('footer-lang-text');
 const $footerPos   = document.getElementById('footer-pos');
 const $footerStatus= document.getElementById('footer-status');
 const $editorPanel = document.getElementById('editor-panel');
 const $outputPanel = document.getElementById('output-panel');
 const $resizer     = document.getElementById('resizer');
+const $editorFilename = document.getElementById('editor-filename');
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let monacoEditor = null;
-let isRunning    = false;
-let isDarkTheme  = true;
+let monacoEditor   = null;
+let isRunning      = false;
+let isDarkTheme    = true;
+let currentLanguage = 'java';
 
-// ─── Monaco bootstrap ────────────────────────────────────────────────────────
+// ─── Monaco bootstrap ─────────────────────────────────────────────────────────
 require.config({
   paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.47.0/min/vs' },
 });
 
 require(['vs/editor/editor.main'], () => {
   monacoEditor = monaco.editor.create(document.getElementById('monaco-editor'), {
-    value             : EXAMPLES.hello.code,
-    language          : 'java',
-    theme             : 'vs-dark',
-    fontSize          : 14,
-    fontFamily        : "'JetBrains Mono','Fira Code','Cascadia Code','Consolas',monospace",
-    fontLigatures     : true,
-    minimap           : { enabled: false },
+    value              : BOILERPLATES.java,
+    language           : 'java',
+    theme              : 'vs-dark',
+    fontSize           : 14,
+    fontFamily         : "'JetBrains Mono','Fira Code','Cascadia Code','Consolas',monospace",
+    fontLigatures      : true,
+    minimap            : { enabled: false },
     scrollBeyondLastLine: false,
-    automaticLayout   : true,
-    tabSize           : 4,
-    wordWrap          : 'on',
+    automaticLayout    : true,
+    tabSize            : 4,
+    wordWrap           : 'on',
     renderLineHighlight: 'line',
-    smoothScrolling   : true,
-    cursorBlinking    : 'smooth',
-    padding           : { top: 12, bottom: 12 },
+    smoothScrolling    : true,
+    cursorBlinking     : 'smooth',
+    padding            : { top: 12, bottom: 12 },
     lineNumbersMinChars: 3,
   });
 
-  // ── Cursor position in footer ─────────────────────────────────────────────
   monacoEditor.onDidChangeCursorPosition((e) => {
     const { lineNumber, column } = e.position;
     $footerPos.textContent = `Ln ${lineNumber}, Col ${column}`;
   });
 
-  // ── Keyboard shortcut: Ctrl+Enter / Cmd+Enter ─────────────────────────────
-  monacoEditor.addCommand(
-    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
-    runCode
-  );
-
-  // ── Keyboard shortcut: Ctrl+L — clear output ─────────────────────────────
-  monacoEditor.addCommand(
-    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL,
-    clearOutput
-  );
+  monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runCode);
+  monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL,  clearOutput);
 });
 
-// ─── Run code ────────────────────────────────────────────────────────────────
+// ─── Language switching ───────────────────────────────────────────────────────
+function switchLanguage(lang) {
+  if (!LANG_CONFIG[lang]) return;
+  currentLanguage = lang;
+
+  const cfg = LANG_CONFIG[lang];
+
+  // Update Monaco language mode (doesn't reset content)
+  if (monacoEditor) {
+    monaco.editor.setModelLanguage(monacoEditor.getModel(), cfg.monacoId);
+    monacoEditor.updateOptions({ tabSize: cfg.tabSize });
+    monacoEditor.setValue(BOILERPLATES[lang]);
+  }
+
+  // Update visible metadata
+  $editorFilename.textContent = cfg.filename;
+  $footerLangTxt.textContent  = cfg.label;
+
+  // Re-filter example options to show only relevant language
+  filterExamples(lang);
+
+  // Clear stdin and output
+  $stdinArea.value = '';
+  clearOutput();
+}
+
+/** Show only example <option> elements that match the active language */
+function filterExamples(lang) {
+  const options = $exampleSel.querySelectorAll('option[data-lang]');
+  options.forEach((opt) => {
+    opt.hidden = opt.dataset.lang !== lang;
+  });
+  $exampleSel.value = ''; // reset selection
+}
+
+// ─── Run code ─────────────────────────────────────────────────────────────────
 async function runCode() {
   if (isRunning || !monacoEditor) return;
 
@@ -191,13 +328,12 @@ async function runCode() {
     const response = await fetch('/api/compile', {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify({ sourceCode, stdin }),
+      body   : JSON.stringify({ sourceCode, language: currentLanguage, stdin }),
     });
 
     if (!response.ok && response.status !== 200) {
-      // HTTP-level error (400, 413, 429, 500 …)
-      let body;
-      try { body = await response.json(); } catch (_) { body = {}; }
+      let body = {};
+      try { body = await response.json(); } catch (_) {}
       renderOutput({
         success: false,
         error  : body.error || `Server returned HTTP ${response.status}`,
@@ -206,60 +342,37 @@ async function runCode() {
       return;
     }
 
-    const result = await response.json();
-    renderOutput(result);
+    renderOutput(await response.json());
 
   } catch (err) {
-    renderOutput({
-      success: false,
-      error  : `Network error: ${err.message}`,
-      stage  : 'network',
-    });
+    renderOutput({ success: false, error: `Network error: ${err.message}`, stage: 'network' });
   } finally {
     setRunning(false);
   }
 }
 
-// ─── Render output ───────────────────────────────────────────────────────────
+// ─── Render output ────────────────────────────────────────────────────────────
 function renderOutput(result) {
   const { success, output = '', error = '', stage = '', executionTime } = result;
-
   let html = '';
 
-  // Stage badge
-  if (stage === 'timeout') {
-    html += badge('timeout', '⏱ Timeout');
-  } else if (stage === 'compilation') {
-    html += badge('error', '✖ Compilation Error');
-  } else if (stage === 'validation') {
-    html += badge('error', '✖ Validation Error');
-  } else if (stage === 'execution' && !success) {
-    html += badge('error', '✖ Runtime Error');
-  } else if (success) {
-    html += badge('success', '✔ Success');
-  } else {
-    html += badge('error', '✖ Error');
-  }
+  if      (stage === 'timeout')                  html += badge('timeout', '⏱ Timeout');
+  else if (stage === 'compilation')              html += badge('error',   '✖ Compile Error');
+  else if (stage === 'validation')               html += badge('error',   '✖ Validation Error');
+  else if (stage === 'execution' && !success)    html += badge('error',   '✖ Runtime Error');
+  else if (success)                              html += badge('success', '✔ Success');
+  else                                           html += badge('error',   '✖ Error');
 
-  // stdout
-  if (output) {
-    const cls = success ? 'out-success' : 'out-success'; // stdout is always white
-    html += `<span class="${cls}">${escHtml(output)}</span>`;
-  }
+  if (output) html += `<span class="out-success">${escHtml(output)}</span>`;
 
-  // stderr / error message
   if (error) {
     const cls = stage === 'timeout' ? 'out-timeout' : 'out-error';
     if (output) html += '\n';
     html += `<span class="${cls}">${escHtml(error)}</span>`;
   }
 
-  // Nothing at all
-  if (!output && !error) {
-    html += '<span class="out-info">Program produced no output.</span>';
-  }
+  if (!output && !error) html += '<span class="out-info">Program produced no output.</span>';
 
-  // Execution time
   if (typeof executionTime === 'number') {
     html += `\n<span class="exec-time">Finished in ${executionTime} ms</span>`;
   }
@@ -273,9 +386,10 @@ function badge(type, text) {
 }
 
 function showRunningState() {
+  const label = LANG_CONFIG[currentLanguage]?.label ?? currentLanguage;
   $outputTerm.innerHTML =
     '<div class="stage-badge running">● Running…</div>' +
-    '<span class="out-info">Compiling and executing your Java code…</span>';
+    `<span class="out-info">Compiling and executing your ${label} code…</span>`;
 }
 
 function clearOutput() {
@@ -283,13 +397,11 @@ function clearOutput() {
   updateFooterStatus(null);
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function escHtml(str) {
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function setRunning(state) {
@@ -315,16 +427,16 @@ function updateFooterStatus(success, stage) {
   }
 }
 
-// ─── Event listeners ─────────────────────────────────────────────────────────
+// ─── Event listeners ──────────────────────────────────────────────────────────
+$langSel.addEventListener('change', () => switchLanguage($langSel.value));
+
 $btnRun.addEventListener('click', runCode);
 
 $btnTheme.addEventListener('click', () => {
   isDarkTheme = !isDarkTheme;
   document.body.classList.toggle('theme-light', !isDarkTheme);
-  if (monacoEditor) {
-    monaco.editor.setTheme(isDarkTheme ? 'vs-dark' : 'vs');
-  }
-  $btnTheme.title = isDarkTheme ? 'Switch to Light Theme' : 'Switch to Dark Theme';
+  if (monacoEditor) monaco.editor.setTheme(isDarkTheme ? 'vs-dark' : 'vs');
+  $btnTheme.title     = isDarkTheme ? 'Switch to Light Theme' : 'Switch to Dark Theme';
   $btnTheme.innerHTML = isDarkTheme ? sunIcon() : moonIcon();
 });
 
@@ -334,23 +446,33 @@ $btnCopy.addEventListener('click', async () => {
   if (!monacoEditor) return;
   try {
     await navigator.clipboard.writeText(monacoEditor.getValue());
-    const original = $btnCopy.textContent;
+    const orig = $btnCopy.textContent;
     $btnCopy.textContent = 'Copied!';
-    setTimeout(() => ($btnCopy.textContent = original), 1500);
-  } catch (_) { /* clipboard denied */ }
+    setTimeout(() => ($btnCopy.textContent = orig), 1500);
+  } catch (_) {}
 });
 
 $btnStdin.addEventListener('click', () => {
   $stdinSection.classList.toggle('open');
   const isOpen = $stdinSection.classList.contains('open');
-  $btnStdin.textContent = isOpen ? 'Hide Input' : 'Input (stdin)';
+  $btnStdin.textContent  = isOpen ? 'Hide Input' : 'Input (stdin)';
+  $btnStdin.setAttribute('aria-expanded', String(isOpen));
+  $stdinSection.setAttribute('aria-hidden', String(!isOpen));
 });
 
 $exampleSel.addEventListener('change', () => {
   const key = $exampleSel.value;
-  if (!key || !EXAMPLES[key] || !monacoEditor) return;
-  const ex = EXAMPLES[key];
+  const ex  = key && EXAMPLES[key];
+  if (!ex || !monacoEditor) return;
+
+  // If the example belongs to a different language, switch first
+  if (ex.lang !== currentLanguage) {
+    $langSel.value = ex.lang;
+    switchLanguage(ex.lang);
+  }
+
   monacoEditor.setValue(ex.code);
+
   if (ex.stdin) {
     $stdinArea.value = ex.stdin;
     $stdinSection.classList.add('open');
@@ -358,19 +480,22 @@ $exampleSel.addEventListener('change', () => {
   } else {
     $stdinArea.value = '';
   }
-  $exampleSel.value = ''; // reset selector
+
+  $exampleSel.value = ''; // reset dropdown
   clearOutput();
 });
 
-// ─── Drag-to-resize splitter ─────────────────────────────────────────────────
+// ─── Initialise example filter for the default language ──────────────────────
+filterExamples('java');
+
+// ─── Drag-to-resize splitter ──────────────────────────────────────────────────
 (function initResizer() {
   let dragging = false;
   let startX, startEditorW, startOutputW;
-  const isVertical = () => window.innerWidth <= 700;
 
   $resizer.addEventListener('mousedown', (e) => {
     dragging = true;
-    startX = e.clientX;
+    startX        = e.clientX;
     startEditorW  = $editorPanel.offsetWidth;
     startOutputW  = $outputPanel.offsetWidth;
     $resizer.classList.add('dragging');
@@ -381,7 +506,7 @@ $exampleSel.addEventListener('change', () => {
 
   document.addEventListener('mousemove', (e) => {
     if (!dragging) return;
-    const dx     = e.clientX - startX;
+    const dx = e.clientX - startX;
     const newEditor = startEditorW + dx;
     const newOutput = startOutputW - dx;
     const min = 220;
@@ -396,13 +521,12 @@ $exampleSel.addEventListener('change', () => {
       $resizer.classList.remove('dragging');
       document.body.style.cursor    = '';
       document.body.style.userSelect = '';
-      // Trigger Monaco layout recalculation
       if (monacoEditor) monacoEditor.layout();
     }
   });
 })();
 
-// ─── SVG icons ───────────────────────────────────────────────────────────────
+// ─── SVG icons ────────────────────────────────────────────────────────────────
 function moonIcon() {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
@@ -411,13 +535,9 @@ function moonIcon() {
 function sunIcon() {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <circle cx="12" cy="12" r="5"/>
-    <line x1="12" y1="1" x2="12" y2="3"/>
-    <line x1="12" y1="21" x2="12" y2="23"/>
-    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-    <line x1="1" y1="12" x2="3" y2="12"/>
-    <line x1="21" y1="12" x2="23" y2="12"/>
-    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
   </svg>`;
 }

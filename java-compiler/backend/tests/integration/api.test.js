@@ -3,35 +3,45 @@
 /**
  * Integration tests for the Express API (/api/compile and /health).
  *
- * These tests spin up the Express app (without binding a real port) via
- * supertest and make HTTP requests against every endpoint.
+ * Spins up the Express app via supertest (no real port).
+ * All toolchains (javac/java, python3, gcc, g++) must be on PATH.
  *
- * Run inside Docker OR on any machine with a JDK installed.
+ * Sections:
+ *   • /health
+ *   • Java  — success, stdin, multiline, compile error, runtime error, timeout, validation
+ *   • Python — success, stdin, error, timeout
+ *   • C      — success, stdin, compile error, timeout
+ *   • C++    — success, stdin, compile error, timeout
+ *   • Multi-language validation — unsupported language, missing fields
  */
 
 const request = require('supertest');
 const app     = require('../../src/server');
 
-// ─── /health ─────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// /health
+// ═════════════════════════════════════════════════════════════════════════════
 
 describe('GET /health', () => {
   test('responds 200 with status ok', async () => {
     const res = await request(app).get('/health');
-
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
     expect(res.body.timestamp).toBeDefined();
   });
 });
 
-// ─── POST /api/compile — happy paths ─────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// JAVA — existing tests (unchanged)
+// ═════════════════════════════════════════════════════════════════════════════
 
-describe('POST /api/compile — successful compilation', () => {
+describe('POST /api/compile — Java: successful compilation', () => {
 
   test('returns 200 and correct stdout for Hello World', async () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class HelloWorld {
             public static void main(String[] args) {
@@ -39,8 +49,7 @@ describe('POST /api/compile — successful compilation', () => {
             }
           }
         `,
-      })
-      .set('Content-Type', 'application/json');
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -53,6 +62,7 @@ describe('POST /api/compile — successful compilation', () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           import java.util.Scanner;
           public class ReadInput {
@@ -75,12 +85,11 @@ describe('POST /api/compile — successful compilation', () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class MultiLine {
             public static void main(String[] args) {
-              for (int i = 1; i <= 5; i++) {
-                System.out.println("Line " + i);
-              }
+              for (int i = 1; i <= 5; i++) System.out.println("Line " + i);
             }
           }
         `,
@@ -88,24 +97,21 @@ describe('POST /api/compile — successful compilation', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    for (let i = 1; i <= 5; i++) {
-      expect(res.body.output).toContain(`Line ${i}`);
-    }
+    for (let i = 1; i <= 5; i++) expect(res.body.output).toContain(`Line ${i}`);
   });
 });
 
-// ─── POST /api/compile — compilation errors ───────────────────────────────────
+describe('POST /api/compile — Java: compilation errors', () => {
 
-describe('POST /api/compile — compilation errors', () => {
-
-  test('returns success=false and error message for syntax error', async () => {
+  test('returns success=false and error for syntax error', async () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class BadSyntax {
             public static void main(String[] args) {
-              System.out.println("oops"   // missing closing paren + semicolon
+              System.out.println("oops"
             }
           }
         `,
@@ -121,6 +127,7 @@ describe('POST /api/compile — compilation errors', () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class UndeclaredVar {
             public static void main(String[] args) {
@@ -138,20 +145,24 @@ describe('POST /api/compile — compilation errors', () => {
   test('does not leak temp-directory path in error messages', async () => {
     const res = await request(app)
       .post('/api/compile')
-      .send({ sourceCode: 'public class Broken { public static void main(String[] a) { x } }' });
+      .send({
+        language  : 'java',
+        sourceCode: 'public class Broken { public static void main(String[] a) { x } }',
+      });
 
-    expect(res.body.error).not.toMatch(/java_compiler_/);
+    // The sanitizePaths() function must strip the UUID temp dir from errors
+    expect(res.body.error).not.toMatch(/compiler_java_/);
+    expect(res.body.error).not.toMatch(/\/tmp\//);
   });
 });
 
-// ─── POST /api/compile — runtime errors ──────────────────────────────────────
-
-describe('POST /api/compile — runtime errors', () => {
+describe('POST /api/compile — Java: runtime errors', () => {
 
   test('captures NullPointerException', async () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class NPE {
             public static void main(String[] args) {
@@ -172,6 +183,7 @@ describe('POST /api/compile — runtime errors', () => {
     const res = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class SystemExit {
             public static void main(String[] args) {
@@ -184,48 +196,246 @@ describe('POST /api/compile — runtime errors', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.output).toContain('before exit');
-    // exit code 1 → success should be false
     expect(res.body.success).toBe(false);
   });
 });
 
-// ─── POST /api/compile — timeout ─────────────────────────────────────────────
+describe('POST /api/compile — Java: timeout', () => {
 
-describe('POST /api/compile — timeout', () => {
-
-  test('kills infinite loop and returns timeout within 10 s', async () => {
+  test('kills infinite loop within 10 s', async () => {
     const start = Date.now();
     const res   = await request(app)
       .post('/api/compile')
       .send({
+        language  : 'java',
         sourceCode: `
           public class Spin {
-            public static void main(String[] args) {
-              while (true) {}
-            }
+            public static void main(String[] args) { while (true) {} }
           }
         `,
       })
-      .timeout(15_000); // supertest's own socket timeout
-
-    const elapsed = Date.now() - start;
+      .timeout(15_000);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(false);
     expect(res.body.stage).toBe('timeout');
     expect(res.body.error).toMatch(/timed out/i);
-    expect(elapsed).toBeLessThan(10_000);
+    expect(Date.now() - start).toBeLessThan(10_000);
   }, 20_000);
 });
 
-// ─── POST /api/compile — input validation ────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// PYTHON
+// ═════════════════════════════════════════════════════════════════════════════
 
-describe('POST /api/compile — input validation', () => {
+describe('POST /api/compile — Python', () => {
+
+  test('runs Hello World and returns correct output', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({ language: 'python', sourceCode: 'print("Hello, World!")' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('Hello, World!');
+    expect(res.body.stage).toBe('execution');
+    expect(typeof res.body.executionTime).toBe('number');
+  });
+
+  test('reads from stdin via input()', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'python',
+        sourceCode: 'n = int(input())\nprint(n * n)',
+        stdin     : '12',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('144');
+  });
+
+  test('captures NameError and returns success=false', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'python',
+        sourceCode: 'print(undefined_variable)',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('execution');
+    expect(res.body.error).toMatch(/NameError/i);
+  });
+
+  test('kills Python infinite loop within 10 s', async () => {
+    const start = Date.now();
+    const res   = await request(app)
+      .post('/api/compile')
+      .send({ language: 'python', sourceCode: 'while True: pass' })
+      .timeout(15_000);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('timeout');
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — C', () => {
+
+  test('compiles and runs Hello World', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'c',
+        sourceCode: '#include <stdio.h>\nint main() { printf("Hello, World!\\n"); return 0; }',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('Hello, World!');
+    expect(res.body.stage).toBe('execution');
+  });
+
+  test('reads from stdin via scanf', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'c',
+        sourceCode: '#include <stdio.h>\nint main() { int n; scanf("%d",&n); printf("%d\\n", n+n); return 0; }',
+        stdin     : '21',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('42');
+  });
+
+  test('returns compile error for missing semicolon', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'c',
+        sourceCode: '#include <stdio.h>\nint main() { printf("bad") return 0; }',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('compilation');
+    expect(res.body.error).toMatch(/error/i);
+    expect(res.body.error).not.toMatch(/compiler_c_/);
+  });
+
+  test('kills C infinite loop within 10 s', async () => {
+    const start = Date.now();
+    const res   = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'c',
+        sourceCode: '#include <stdio.h>\nint main() { while(1){} return 0; }',
+      })
+      .timeout(15_000);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('timeout');
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C++
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — C++', () => {
+
+  test('compiles and runs Hello World', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'cpp',
+        sourceCode: '#include <iostream>\nint main() { std::cout << "Hello, World!" << std::endl; return 0; }',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('Hello, World!');
+    expect(res.body.stage).toBe('execution');
+  });
+
+  test('reads from stdin via cin', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'cpp',
+        sourceCode: '#include <iostream>\nint main() { int n; std::cin>>n; std::cout<<n*n<<std::endl; return 0; }',
+        stdin     : '7',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('49');
+  });
+
+  test('returns compile error for undeclared identifier', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'cpp',
+        sourceCode: '#include <iostream>\nint main() { std::cout << unknownVar; return 0; }',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('compilation');
+    expect(res.body.error).toMatch(/error/i);
+    expect(res.body.error).not.toMatch(/compiler_cpp_/);
+  });
+
+  test('kills C++ infinite loop within 10 s', async () => {
+    const start = Date.now();
+    const res   = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'cpp',
+        sourceCode: '#include <iostream>\nint main() { while(true){} return 0; }',
+      })
+      .timeout(15_000);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('timeout');
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Multi-language validation
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — input validation (multi-language)', () => {
+
+  test('returns 400 for an unsupported language', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({ language: 'ruby', sourceCode: 'puts "hello"' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/unsupported language/i);
+  });
 
   test('returns 400 when sourceCode is missing', async () => {
     const res = await request(app)
       .post('/api/compile')
-      .send({});
+      .send({ language: 'python' });
 
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
@@ -234,7 +444,7 @@ describe('POST /api/compile — input validation', () => {
   test('returns 400 when sourceCode is not a string', async () => {
     const res = await request(app)
       .post('/api/compile')
-      .send({ sourceCode: 12345 });
+      .send({ language: 'c', sourceCode: 12345 });
 
     expect(res.status).toBe(400);
   });
@@ -242,12 +452,13 @@ describe('POST /api/compile — input validation', () => {
   test('returns 413 when sourceCode exceeds 50 KB', async () => {
     const res = await request(app)
       .post('/api/compile')
-      .send({ sourceCode: 'A'.repeat(51_000) });
+      .send({ language: 'python', sourceCode: 'A'.repeat(51_000) });
 
     expect(res.status).toBe(413);
   });
 
-  test('returns validation error for source with no class', async () => {
+  test('defaults language to java and returns validation error for no class', async () => {
+    // No language field — should default to java
     const res = await request(app)
       .post('/api/compile')
       .send({ sourceCode: 'int x = 5;' });
@@ -257,8 +468,7 @@ describe('POST /api/compile — input validation', () => {
     expect(res.body.stage).toBe('validation');
   });
 
-  test('returns 404 for unknown routes (not SPA assets)', async () => {
-    // Unknown API routes return 404 via Express default
+  test('returns 404 for unknown API routes', async () => {
     const res = await request(app).get('/api/unknown-endpoint');
     expect(res.status).toBe(404);
   });

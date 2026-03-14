@@ -5,12 +5,13 @@
  *   - Bootstrap Monaco Editor with per-language syntax highlighting.
  *   - Language selector: switches Monaco mode, boilerplate, filename, footer.
  *   - Example selector: language-filtered snippets.
- *   - POST to /api/compile with { sourceCode, language, stdin }.
+ *   - POST to /api/compile with { sourceCode, language, stdin, strictWarnings }.
  *   - Render stdout / stderr results with stage badges.
  *   - Keyboard shortcut: Ctrl+Enter → Run, Ctrl+L → Clear.
  *   - Drag-to-resize panel splitter.
  *   - Dark / Light theme toggle.
  *   - Stdin toggle panel.
+ *   - Strict Warnings toggle (visible for C / C++ only).
  */
 
 'use strict';
@@ -21,10 +22,12 @@
 // filename  : shown in the editor panel header
 // tabSize   : sensible default per language convention
 const LANG_CONFIG = {
-  java  : { monacoId: 'java',   label: 'Java 17',    filename: 'HelloWorld.java', tabSize: 4 },
-  python: { monacoId: 'python', label: 'Python 3',   filename: 'program.py',     tabSize: 4 },
-  c     : { monacoId: 'c',      label: 'C (gcc)',    filename: 'program.c',       tabSize: 4 },
-  cpp   : { monacoId: 'cpp',    label: 'C++ (g++)', filename: 'program.cpp',     tabSize: 4 },
+  java      : { monacoId: 'java',       label: 'Java 17',       filename: 'HelloWorld.java', tabSize: 4 },
+  python    : { monacoId: 'python',     label: 'Python 3',      filename: 'program.py',      tabSize: 4 },
+  c         : { monacoId: 'c',          label: 'C (gcc)',        filename: 'program.c',       tabSize: 4 },
+  cpp       : { monacoId: 'cpp',        label: 'C++ (g++)',      filename: 'program.cpp',     tabSize: 4 },
+  javascript: { monacoId: 'javascript', label: 'JavaScript',     filename: 'program.js',      tabSize: 2 },
+  typescript: { monacoId: 'typescript', label: 'TypeScript',     filename: 'program.ts',      tabSize: 2 },
 };
 
 // ─── Code examples (keyed by example ID, include data-lang) ─────────────────
@@ -205,14 +208,60 @@ int main() {
     return 0;
 }`,
   },
+
+  // ── JavaScript ────────────────────────────────────────────────────────────
+  js_hello: {
+    lang : 'javascript',
+    code : `console.log("Hello, World!");`,
+  },
+  js_arrow: {
+    lang : 'javascript',
+    code : `const greet = (name) => \`Hello, \${name}!\`;
+
+const names = ["Alice", "Bob", "Carol"];
+names.forEach(name => console.log(greet(name)));`,
+  },
+  js_infinite: {
+    lang : 'javascript',
+    code : `console.log("Starting infinite loop...");
+while (true) { /* killed after 5 s */ }`,
+  },
+
+  // ── TypeScript ────────────────────────────────────────────────────────────
+  ts_hello: {
+    lang : 'typescript',
+    code : `const msg: string = "Hello, World!";
+console.log(msg);`,
+  },
+  ts_interface: {
+    lang : 'typescript',
+    code : `interface Person {
+    name: string;
+    age : number;
+}
+
+function greet(p: Person): string {
+    return \`Hello, \${p.name}! You are \${p.age} years old.\`;
+}
+
+const alice: Person = { name: "Alice", age: 30 };
+console.log(greet(alice));`,
+  },
+  ts_infinite: {
+    lang : 'typescript',
+    code : `console.log("Starting infinite loop...");
+while (true) { /* killed after 5 s */ }`,
+  },
 };
 
 // ── Default boilerplate per language (shown when switching) ──────────────────
 const BOILERPLATES = {
-  java  : EXAMPLES.java_hello.code,
-  python: EXAMPLES.py_hello.code,
-  c     : EXAMPLES.c_hello.code,
-  cpp   : EXAMPLES.cpp_hello.code,
+  java      : EXAMPLES.java_hello.code,
+  python    : EXAMPLES.py_hello.code,
+  c         : EXAMPLES.c_hello.code,
+  cpp       : EXAMPLES.cpp_hello.code,
+  javascript: EXAMPLES.js_hello.code,
+  typescript: EXAMPLES.ts_hello.code,
 };
 
 // ─── DOM references ──────────────────────────────────────────────────────────
@@ -233,11 +282,14 @@ const $editorPanel = document.getElementById('editor-panel');
 const $outputPanel = document.getElementById('output-panel');
 const $resizer     = document.getElementById('resizer');
 const $editorFilename = document.getElementById('editor-filename');
+// Strict Warnings toggle (C / C++ only)
+const $strictLabel  = document.getElementById('strict-warnings-label');
+const $strictToggle = document.getElementById('strict-warnings-toggle');
 
 // ─── State ───────────────────────────────────────────────────────────────────
-let monacoEditor   = null;
-let isRunning      = false;
-let isDarkTheme    = true;
+let monacoEditor    = null;
+let isRunning       = false;
+let isDarkTheme     = true;
 let currentLanguage = 'java';
 
 // ─── Monaco bootstrap ─────────────────────────────────────────────────────────
@@ -292,6 +344,15 @@ function switchLanguage(lang) {
   $editorFilename.textContent = cfg.filename;
   $footerLangTxt.textContent  = cfg.label;
 
+  // Show Strict Warnings toggle only for C and C++;
+  // reset it whenever switching away so state doesn't persist unexpectedly.
+  const isCC = lang === 'c' || lang === 'cpp';
+  $strictLabel.style.display = isCC ? 'flex' : 'none';
+  if (!isCC) {
+    $strictToggle.checked = false;
+    $strictToggle.setAttribute('aria-checked', 'false');
+  }
+
   // Re-filter example options to show only relevant language
   filterExamples(lang);
 
@@ -313,8 +374,9 @@ function filterExamples(lang) {
 async function runCode() {
   if (isRunning || !monacoEditor) return;
 
-  const sourceCode = monacoEditor.getValue();
-  const stdin      = $stdinArea.value;
+  const sourceCode     = monacoEditor.getValue();
+  const stdin          = $stdinArea.value;
+  const strictWarnings = $strictToggle.checked;
 
   if (!sourceCode.trim()) {
     renderOutput({ success: false, error: 'Editor is empty.', stage: 'validation' });
@@ -328,7 +390,12 @@ async function runCode() {
     const response = await fetch('/api/compile', {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify({ sourceCode, language: currentLanguage, stdin }),
+      body   : JSON.stringify({
+        sourceCode,
+        language: currentLanguage,
+        stdin,
+        strictWarnings,
+      }),
     });
 
     if (!response.ok && response.status !== 200) {
@@ -458,6 +525,11 @@ $btnStdin.addEventListener('click', () => {
   $btnStdin.textContent  = isOpen ? 'Hide Input' : 'Input (stdin)';
   $btnStdin.setAttribute('aria-expanded', String(isOpen));
   $stdinSection.setAttribute('aria-hidden', String(!isOpen));
+});
+
+// Keep aria-checked in sync with the native checkbox for accessibility
+$strictToggle.addEventListener('change', () => {
+  $strictToggle.setAttribute('aria-checked', String($strictToggle.checked));
 });
 
 $exampleSel.addEventListener('change', () => {

@@ -5,10 +5,12 @@
  *
  * These tests bypass HTTP and call compileAndRun() directly.
  * All language toolchains must be available on PATH:
- *   Java  → javac, java
- *   Python → python3
- *   C     → gcc
- *   C++   → g++
+ *   Java       → javac, java
+ *   Python     → python3
+ *   C          → gcc
+ *   C++        → g++
+ *   JavaScript → node
+ *   TypeScript → tsc, node
  *
  * ─── Java (original suite — unchanged) ────────────────────────────────────
  *  1.  Hello World — successful compilation and execution
@@ -41,6 +43,23 @@
  * 25. Runtime error (out-of-bounds via std::vector::at)
  * 26. Infinite loop — timeout
  * 27. stdin → cin reads correctly
+ * ─── JavaScript ─────────────────────────────────────────────────────────────
+ * 28. Hello World — successful execution
+ * 29. Syntax error — Node surfaces it as a runtime error
+ * 30. Infinite loop — timeout
+ * ─── TypeScript ─────────────────────────────────────────────────────────────
+ * 31. Hello World — tsc compiles then runs successfully
+ * 32. Type error — tsc rejects it at compile stage
+ * 33. Syntax error — tsc rejects it at compile stage
+ * 34. Infinite loop — timeout during execution
+ * ─── C strictWarnings (-Wall) ───────────────────────────────────────────────
+ * 35. Clean C + strictWarnings:true → compiles and runs, no warnings
+ * 36. Unused variable + strictWarnings:true → runs successfully, warning in error field
+ * 37. Unused variable + strictWarnings:false → runs successfully, no warning output
+ * ─── C++ strictWarnings (-Wall) ─────────────────────────────────────────────
+ * 38. Clean C++ + strictWarnings:true → compiles and runs, no warnings
+ * 39. Unused variable + strictWarnings:true → runs successfully, warning in error field
+ * 40. Unused variable + strictWarnings:false → runs successfully, no warning output
  * ─── extractClassName() helpers ────────────────────────────────────────────
  */
 
@@ -422,5 +441,174 @@ describe('C++ — compileAndRun()', () => {
     );
     expect(result.success).toBe(true);
     expect(result.output.trim()).toBe('Hi, Carol!');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// JAVASCRIPT
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('JavaScript — compileAndRun()', () => {
+
+  test('28. runs Hello World successfully', async () => {
+    const result = await compileAndRun(
+      'console.log("Hello, World!");',
+      '',
+      'javascript'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, World!');
+    expect(result.stage).toBe('execution');
+  });
+
+  test('29. reports syntax error in stderr', async () => {
+    // Malformed JS: function declaration with unclosed parameter list
+    const result = await compileAndRun(
+      'function bad( { console.log("oops"); }',
+      '',
+      'javascript'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('execution'); // Node surfaces parse errors at startup
+    expect(result.error).toMatch(/SyntaxError/i);
+  });
+
+  test('30. kills JavaScript infinite loop (timeout)', async () => {
+    const start  = Date.now();
+    const result = await compileAndRun(
+      'while(true) {}',
+      '',
+      'javascript'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('timeout');
+    expect(result.error).toMatch(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 20_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TYPESCRIPT
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('TypeScript — compileAndRun()', () => {
+
+  test('31. compiles and runs typed Hello World successfully', async () => {
+    const result = await compileAndRun(
+      'const msg: string = "Hello, World!";\nconsole.log(msg);',
+      '',
+      'typescript'
+    );
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello, World!');
+    expect(result.stage).toBe('execution');
+  });
+
+  test('32. tsc rejects type error at compile stage', async () => {
+    // Assigning a string literal to a number-typed variable
+    const result = await compileAndRun(
+      'const x: number = "hello";',
+      '',
+      'typescript'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('compilation');
+    expect(result.error).toMatch(/error/i);
+  });
+
+  test('33. tsc rejects syntax error at compile stage', async () => {
+    const result = await compileAndRun(
+      'const msg: string = ;',
+      '',
+      'typescript'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('compilation');
+    expect(result.error).toMatch(/error/i);
+  });
+
+  test('34. kills TypeScript infinite loop (timeout)', async () => {
+    const start  = Date.now();
+    const result = await compileAndRun(
+      'while(true) {}',
+      '',
+      'typescript'
+    );
+    expect(result.success).toBe(false);
+    expect(result.stage).toBe('timeout');
+    expect(result.error).toMatch(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(15_000); // tsc compile + 5 s run
+  }, 30_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C — Strict Warnings (-Wall)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('C — strictWarnings (-Wall)', () => {
+
+  const cleanC      = '#include <stdio.h>\nint main() { printf("Hello\\n"); return 0; }';
+  // An unused local variable triggers -Wunused-variable when -Wall is active
+  const unusedVarC  = '#include <stdio.h>\nint main() { int x; printf("Hello\\n"); return 0; }';
+
+  test('35. clean C compiles, runs, and emits no warnings with strictWarnings:true', async () => {
+    const result = await compileAndRun(cleanC, '', 'c', { strictWarnings: true });
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello');
+    expect(result.stage).toBe('execution');
+    expect(result.error).toBe('');
+  });
+
+  test('36. unused variable shows warning in error field but still runs with strictWarnings:true', async () => {
+    const result = await compileAndRun(unusedVarC, '', 'c', { strictWarnings: true });
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('execution');
+    expect(result.output.trim()).toBe('Hello');
+    // Warning text surfaced via -Wall (unused variable warning)
+    expect(result.error).toMatch(/unused/i);
+  });
+
+  test('37. same unused variable produces no warning with strictWarnings:false', async () => {
+    const result = await compileAndRun(unusedVarC, '', 'c', { strictWarnings: false });
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello');
+    expect(result.stage).toBe('execution');
+    expect(result.error).toBe('');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C++ — Strict Warnings (-Wall)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('C++ — strictWarnings (-Wall)', () => {
+
+  const cleanCpp     = '#include <iostream>\nint main() { std::cout << "Hello" << std::endl; return 0; }';
+  // An unused local variable triggers -Wunused-variable when -Wall is active
+  const unusedVarCpp = '#include <iostream>\nint main() { int x; std::cout << "Hello" << std::endl; return 0; }';
+
+  test('38. clean C++ compiles, runs, and emits no warnings with strictWarnings:true', async () => {
+    const result = await compileAndRun(cleanCpp, '', 'cpp', { strictWarnings: true });
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello');
+    expect(result.stage).toBe('execution');
+    expect(result.error).toBe('');
+  });
+
+  test('39. unused variable shows warning in error field but still runs with strictWarnings:true', async () => {
+    const result = await compileAndRun(unusedVarCpp, '', 'cpp', { strictWarnings: true });
+    expect(result.success).toBe(true);
+    expect(result.stage).toBe('execution');
+    expect(result.output.trim()).toBe('Hello');
+    // Warning text surfaced via -Wall (unused variable warning)
+    expect(result.error).toMatch(/unused/i);
+  });
+
+  test('40. same unused variable produces no warning with strictWarnings:false', async () => {
+    const result = await compileAndRun(unusedVarCpp, '', 'cpp', { strictWarnings: false });
+    expect(result.success).toBe(true);
+    expect(result.output.trim()).toBe('Hello');
+    expect(result.stage).toBe('execution');
+    expect(result.error).toBe('');
   });
 });

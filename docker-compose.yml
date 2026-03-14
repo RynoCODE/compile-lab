@@ -3,7 +3,7 @@ version: "3.9"
 # ─────────────────────────────────────────────────────────────────────────────
 # Multi-language Online Compiler — Docker Compose
 #
-# Supported languages: Java 17 · Python 3 · C (gcc) · C++ (g++)
+# Supported languages: Java 17 · Python 3 · C (gcc) · C++ (g++) · JavaScript · TypeScript (tsc)
 #
 # Security posture:
 #   • Non-root user (appuser:1001) enforced in the Dockerfile

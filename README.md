@@ -1,16 +1,17 @@
 # CodeRun — Multi-Language Online Compiler
 
-> A self-hosted, browser-based code compiler and runner supporting Java, Python, C, and C++. Built with Node.js, Monaco Editor, and Docker.
+> A self-hosted, browser-based code compiler and runner supporting Java, Python, C, C++, JavaScript, and TypeScript. Built with Node.js, Monaco Editor, and Docker.
 
 ---
 
 ## Features
 
-- **4 Languages** — Java 17, Python 3, C (GCC), C++ (G++)
-- **Monaco Editor** — VS Code's editor engine with full syntax highlighting
+- **6 Languages** — Java 17, Python 3, C (GCC), C++ (G++), JavaScript (Node.js 20), TypeScript (tsc)
+- **Monaco Editor** — VS Code's editor engine with full syntax highlighting per language
 - **stdin Support** — pipe custom input to your programs
 - **Split-panel UI** — resizable editor and output panels
 - **Dark / Light theme** — toggle between themes
+- **Show Warnings toggle** — for C/C++: enables `-Wall` so compiler warnings are surfaced to the user; the program still compiles and runs (opt-in)
 - **Stage-aware output** — badges for Compile Error, Runtime Error, Timeout, and Success
 - **Execution timing** — see how long your program ran
 - **Keyboard shortcuts** — `Ctrl+Enter` to run, `Ctrl+L` to clear output
@@ -20,12 +21,14 @@
 
 ## Supported Languages
 
-| Language   | Runtime              | Compiler / Interpreter |
-|------------|----------------------|------------------------|
-| Java       | Eclipse Temurin 17   | `javac` + `java`       |
-| Python 3   | Python 3 (system)    | `python3`              |
-| C          | GCC                  | `gcc` with `-lm`       |
-| C++        | G++                  | `g++`                  |
+| Language     | Runtime                 | Compiler / Interpreter        |
+|--------------|-------------------------|-------------------------------|
+| Java         | Eclipse Temurin 17      | `javac` + `java`              |
+| Python 3     | Python 3 (system)       | `python3`                     |
+| C            | GCC                     | `gcc` with `-lm`              |
+| C++          | G++                     | `g++`                         |
+| JavaScript   | Node.js 20              | `node` (interpreted directly) |
+| TypeScript   | Node.js 20 + tsc        | `tsc` → `node`                |
 
 ---
 
@@ -62,11 +65,12 @@ Compile and run source code.
 
 **Request body** (JSON):
 
-| Field        | Type   | Required | Limits   | Description                     |
-|--------------|--------|----------|----------|---------------------------------|
-| `sourceCode` | string | yes      | max 50 KB| Source code to compile and run  |
-| `language`   | string | no       | —        | `java` \| `python` \| `c` \| `cpp` (default: `java`) |
-| `stdin`      | string | no       | max 4 KB | Standard input for the program  |
+| Field            | Type    | Required | Limits   | Description                                                              |
+|------------------|---------|----------|----------|--------------------------------------------------------------------------|
+| `sourceCode`     | string  | yes      | max 50 KB| Source code to compile and run                                           |
+| `language`       | string  | no       | —        | `java` \| `python` \| `c` \| `cpp` \| `javascript` \| `typescript` (default: `java`) |
+| `stdin`          | string  | no       | max 4 KB | Standard input for the program                                           |
+| `strictWarnings` | boolean | no       | —        | When `true` and language is `c` or `cpp`, appends `-Wall` so compiler warnings are shown to the user. The program still compiles and runs; warnings appear in the `error` field alongside any runtime errors. Ignored for all other languages. |
 
 **Response** (JSON):
 
@@ -74,19 +78,19 @@ Compile and run source code.
 {
   "success": true,
   "output": "Hello, World!\n",
-  "error": null,
+  "error": "",
   "stage": "execution",
   "executionTime": 312
 }
 ```
 
-| Field           | Description                                                  |
-|-----------------|--------------------------------------------------------------|
-| `success`       | `true` if program ran without error                          |
-| `output`        | Combined stdout/stderr                                       |
-| `error`         | Error message (if any)                                       |
-| `stage`         | `validation` \| `compilation` \| `execution` \| `timeout`   |
-| `executionTime` | Wall-clock time in milliseconds                              |
+| Field           | Description                                                               |
+|-----------------|---------------------------------------------------------------------------|
+| `success`       | `true` if program ran without error                                       |
+| `output`        | stdout from the program                                                   |
+| `error`         | Compiler or runtime error message (empty string if none)                  |
+| `stage`         | `validation` \| `compilation` \| `execution` \| `timeout` \| `internal`  |
+| `executionTime` | Wall-clock time in milliseconds                                           |
 
 **Rate limit:** 15 requests / minute / IP
 
@@ -110,16 +114,22 @@ java-compiler/
     ├── package.json
     └── src/
         ├── server.js          # Express app (helmet, CORS, static serving)
-        ├── compiler.js        # Core compile/run engine
+        ├── compiler.js        # Core compile/run engine (all 6 languages)
         └── routes/
             └── compile.js     # POST /api/compile (rate limiting, validation)
 ```
 
 ### How It Works
 
-1. The frontend sends a `POST /api/compile` request with `sourceCode`, `language`, and optional `stdin`.
+1. The frontend sends a `POST /api/compile` request with `sourceCode`, `language`, optional `stdin`, and optional `strictWarnings`.
 2. The backend creates a UUID-namespaced temp directory under `/tmp`, writes the source file, and spawns the appropriate process.
-3. For compiled languages (Java, C, C++), it compiles first, then runs the binary. For Python, it runs directly.
+3. **Execution pipelines by language:**
+   - **Java** — `javac <ClassName>.java` → `java -cp <dir> -Xmx256m -Xss512k <ClassName>`
+   - **Python** — `python3 program.py` (interpreted; syntax errors surface at runtime)
+   - **C** — `gcc program.c -o program -lm` → `./program`
+   - **C++** — `g++ program.cpp -o program` → `./program`
+   - **JavaScript** — `node program.js` (interpreted; syntax errors surface at runtime)
+   - **TypeScript** — `tsc --strict --target ES2020 --module commonjs program.ts` → `node program.js`
 4. Output is streamed and capped at **100 KB**. Processes that exceed the limit are killed.
 5. A **5-second execution timeout** (SIGKILL) and a **10-second compile timeout** protect the host from runaway code.
 6. The temp directory is always cleaned up in a `finally` block.
@@ -130,7 +140,7 @@ java-compiler/
 
 | Measure                     | Detail                                                       |
 |-----------------------------|--------------------------------------------------------------|
-| Non-root user               | Container runs as `appuser` (UID 1001)                      |
+| Non-root user               | Container runs as `appuser` (UID 1001)                       |
 | No privilege escalation     | `no-new-privileges: true`                                    |
 | All capabilities dropped    | `cap_drop: ALL`                                              |
 | Read-only root filesystem   | Only `/tmp` is writable (RAM-backed tmpfs)                   |
@@ -138,8 +148,8 @@ java-compiler/
 | Minimal process environment | Only `PATH` is passed to child processes                     |
 | Output flood protection     | 100 KB cap; process killed on excess                         |
 | Rate limiting               | 15 compile requests / minute / IP                            |
-| Input size limits           | Source ≤ 50 KB, stdin ≤ 4 KB, body ≤ 60 KB                 |
-| JVM memory limits           | `-Xmx256m` (heap), `-Xss512k` (stack)                       |
+| Input size limits           | Source ≤ 50 KB, stdin ≤ 4 KB, body ≤ 60 KB                  |
+| JVM memory limits           | `-Xmx256m` (heap), `-Xss512k` (stack)                        |
 | Container resource limits   | 2 vCPU max, 512 MB RAM max                                   |
 
 ---
@@ -156,18 +166,26 @@ npm run dev        # starts with nodemon (auto-reload)
 
 The server listens on `http://localhost:3000`. The frontend is served as static files from the same server.
 
+> **Note:** TypeScript unit and integration tests call `tsc` as a subprocess. Ensure `tsc` is on your system PATH before running tests: `npm install -g typescript`.
+
 ### Running Tests
 
 ```bash
 cd backend
 
-npm test                 # all tests
-npm run test:unit        # unit tests only (compiler.js directly)
+npm test                 # all tests (40 unit + integration tests)
+npm run test:unit        # unit tests only (compiler.js directly, tests 1–40)
 npm run test:integration # integration tests (HTTP via supertest)
 npm run test:coverage    # with coverage report
 ```
 
-Tests cover all 4 languages including Hello World, syntax errors, runtime errors, infinite loops, stdin, output flooding, rate limiting, and path-leak prevention.
+Tests cover all 6 languages including:
+- Hello World execution, syntax/compile errors, runtime errors, infinite loop timeouts
+- stdin reading for Java, Python, C, C++
+- TypeScript type error detection at the `compilation` stage
+- JavaScript syntax error detection at the `execution` stage
+- `strictWarnings` opt-in for C and C++ (tests 35–40)
+- Output flood protection, path-leak prevention, and rate limiting
 
 ---
 
@@ -192,6 +210,9 @@ docker compose down && docker compose up -d --build
 # View server logs
 docker logs code-compiler --tail 50 -f
 
+# Verify tsc is available in the container
+docker exec code-compiler tsc --version
+
 # Verify /tmp is mounted with exec flag (required for C/C++)
 docker exec code-compiler mount | grep /tmp
 
@@ -199,7 +220,7 @@ docker exec code-compiler mount | grep /tmp
 docker stats code-compiler
 ```
 
-> **Note:** Docker mounts tmpfs with `noexec` by default. The `exec` flag is explicitly set in `docker-compose.yml` so that C/C++ binaries compiled into `/tmp` can actually be executed.
+> **Note on tmpfs:** Docker mounts tmpfs with `noexec` by default. The `exec` flag is explicitly set in `docker-compose.yml` so that C/C++ binaries compiled into `/tmp` can be executed. JavaScript and TypeScript execution is unaffected since `node` itself is a system binary — only the source/output files live in `/tmp`.
 
 ---
 

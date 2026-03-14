@@ -393,6 +393,75 @@ html, body {
 /* ── Scrollbar (Firefox) ─────────────────────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
+/* ── Strict Warnings toggle (C / C++ only) ──────────────────────── */
+/* Hidden by default; JS adds display:flex when language is c or cpp */
+.strict-warnings {
+  display      : none;          /* shown/hidden by JS */
+  align-items  : center;
+  gap          : 6px;
+  cursor       : pointer;
+  user-select  : none;
+  font-size    : .78rem;
+  font-weight  : 600;
+  color        : var(--text-muted);
+  border       : 1px solid var(--border);
+  border-radius: var(--radius);
+  padding      : 5px 10px;
+  background   : var(--bg-panel);
+  transition   : border-color .15s, color .15s, background .15s;
+  white-space  : nowrap;
+  /* Tooltip via title attribute — extra hint on hover */
+  position     : relative;
+}
+.strict-warnings:hover {
+  border-color: var(--accent);
+  color       : var(--text-primary);
+}
+
+/* Hide the native checkbox — we style the label itself as the toggle */
+.strict-warnings input[type="checkbox"] {
+  position: absolute;
+  opacity : 0;
+  width   : 0;
+  height  : 0;
+}
+
+/* Visual pill switch */
+.strict-warnings__pill {
+  display      : inline-block;
+  width        : 28px;
+  height       : 16px;
+  border-radius: 8px;
+  background   : var(--border);
+  position     : relative;
+  transition   : background .2s;
+  flex-shrink  : 0;
+}
+.strict-warnings__pill::after {
+  content      : '';
+  position     : absolute;
+  top          : 2px;
+  left         : 2px;
+  width        : 12px;
+  height       : 12px;
+  border-radius: 50%;
+  background   : var(--text-muted);
+  transition   : transform .2s, background .2s;
+}
+.strict-warnings input:checked ~ .strict-warnings__pill {
+  background: var(--accent);
+}
+.strict-warnings input:checked ~ .strict-warnings__pill::after {
+  transform : translateX(12px);
+  background: #fff;
+}
+/* Active state: highlight entire label when checked */
+.strict-warnings:has(input:checked) {
+  border-color: var(--accent);
+  color       : var(--accent);
+  background  : color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
+}
+
 /* ── Responsive: stack vertically on narrow viewports ─────────── */
 @media (max-width: 700px) {
   .workspace  { flex-direction: column; }
@@ -401,4 +470,5 @@ html, body {
   .panel--editor { flex: 0 0 50%; border-right: none; border-bottom: 1px solid var(--border); }
   .panel--output { flex: 1; }
   .header__brand span { display: none; }
+  .strict-warnings__text { display: none; }
 }

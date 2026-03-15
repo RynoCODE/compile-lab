@@ -66,6 +66,13 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ─── 404 for unknown /api/* routes ───────────────────────────────────────────
+// Must be registered BEFORE the SPA fallback so that requests like
+// GET /api/unknown-endpoint return a JSON 404 instead of index.html.
+app.use('/api', (_req, res) => {
+  res.status(404).json({ success: false, error: 'Not Found.' });
+});
+
 // ─── SPA fallback: serve index.html for any unknown route ────────────────────
 app.get('*', (_req, res) => {
   res.sendFile(path.join(FRONTEND_DIR, 'index.html'));

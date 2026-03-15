@@ -1,4 +1,4 @@
-# CodeRun — Multi-Language Online Compiler
+# Compile-Lab — Multi-Language Online Compiler
 
 > A self-hosted, browser-based code compiler and runner supporting Java, Python, C, C++, JavaScript, and TypeScript. Built with Node.js, Monaco Editor, and Docker.
 

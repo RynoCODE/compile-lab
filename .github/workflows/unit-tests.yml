@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow 1 — Unit Tests
+#
+# Runs the Jest unit suite on every push to any branch, and on every PR
+# targeting main.  The job name "unit-tests" is the status-check identifier
+# you register in branch protection rules to gate merges.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Unit Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+# Minimal permissions — read-only checkout is enough for tests
+permissions:
+  contents: read
+
+jobs:
+  # ── Status-check name referenced in branch protection rules ─────────────────
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js setup ───────────────────────────────────────────────────
+      # Uses Node 20 to match the Dockerfile (node:20-slim / nodesource 20.x).
+      # Cache is omitted here until package-lock.json is committed to the repo.
+      # Once committed, add:  cache: 'npm'  and  cache-dependency-path: backend/package-lock.json
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install ALL deps (jest + supertest live in devDependencies) ─────
+      - name: Install dependencies
+        run: npm install
+
+      # ── 4. Run unit tests ──────────────────────────────────────────────────
+      # --ci          → non-interactive, treats new snapshots as failures
+      # set -o pipefail → preserves npm exit code through `tee`
+      - name: Run unit tests
+        id: run-unit-tests
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          npm run test:unit -- --ci 2>&1 \
+            | tee "$GITHUB_WORKSPACE/test-results/unit-output.txt"
+
+      # ── 5. Write job summary (runs even on failure) ────────────────────────
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          RESULT_FILE="$GITHUB_WORKSPACE/test-results/unit-output.txt"
+          {
+            echo "## Unit Test Results"
+            echo ""
+            # Emit pass/fail badge line
+            if [ "${{ steps.run-unit-tests.outcome }}" = "success" ]; then
+              echo "**Status: PASSED**"
+            else
+              echo "**Status: FAILED**"
+            fi
+            echo ""
+            echo "### Output"
+            echo '```'
+            # Cap at 200 lines so the summary stays readable
+            tail -200 "$RESULT_FILE" 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            echo "Full output is available in the **unit-test-output** artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 6. Upload raw output as artifact for download/audit ───────────────
+      - name: Upload test output artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-output
+          path: test-results/unit-output.txt
+          if-no-files-found: ignore
+          retention-days: 7

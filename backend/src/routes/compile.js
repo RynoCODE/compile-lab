@@ -7,11 +7,14 @@ const { compileAndRun, SUPPORTED_LANGUAGES } = require('../compiler');
 const router = express.Router();
 
 // ─── Rate limiter: max 15 compile requests per minute per IP ─────────────────
+// Skipped entirely when NODE_ENV=test so the integration test suite (which
+// fires ~33 requests in a single Jest run) is never blocked by the window.
 const compileLimiter = rateLimit({
   windowMs       : 60 * 1000,
   max            : 15,
   standardHeaders: true,
   legacyHeaders  : false,
+  skip           : () => process.env.NODE_ENV === 'test',
   message        : {
     success: false,
     error  : 'Too many requests. Please wait a moment before trying again.',

@@ -1,0 +1,184 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow 2 — Integration Tests
+#
+# This workflow does two independent things in sequence:
+#
+#   A) Docker validation — builds the image and starts the container via
+#      docker compose to prove the Dockerfile/compose config is correct.
+#      The container's /health endpoint is polled until healthy.
+#
+#   B) In-process integration tests — the Jest suite (api.test.js) imports
+#      the Express app directly via `require('../../src/server')` and drives
+#      it with supertest (no real TCP port is bound, so there is no conflict
+#      with the Docker container also listening on 3000).
+#      NODE_ENV=test is set so the rate-limiter skip() fires, allowing all
+#      ~33 test requests to pass without hitting the 15 req/min window.
+#
+#   ubuntu-latest ships Java 17, Python 3, gcc, and g++ pre-installed.
+#   TypeScript (tsc) is NOT — it is installed globally in step 4.
+#
+# Triggers: push to main, and every PR targeting main.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js setup ──────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install ALL Node deps (jest + supertest in devDependencies) ─────
+      - name: Install Node.js dependencies
+        working-directory: backend
+        run: npm install
+
+      # ── 4. Install TypeScript compiler globally ───────────────────────────
+      # tsc is required by the TypeScript runner in compiler.js.
+      # It is shipped in the Docker image (Dockerfile installs it via npm -g)
+      # but the ubuntu-latest runner does not have it pre-installed.
+      - name: Install TypeScript compiler globally
+        run: npm install -g typescript
+
+      # ── 5. Verify full toolchain is available on the runner ───────────────
+      - name: Verify compiler toolchain
+        run: |
+          echo "--- Toolchain versions ---"
+          java -version  2>&1 || { echo "::error::javac not found"; exit 1; }
+          javac -version 2>&1 || { echo "::error::javac not found"; exit 1; }
+          python3 --version   || { echo "::error::python3 not found"; exit 1; }
+          gcc --version       || { echo "::error::gcc not found"; exit 1; }
+          g++ --version       || { echo "::error::g++ not found"; exit 1; }
+          node --version      || { echo "::error::node not found"; exit 1; }
+          tsc --version       || { echo "::error::tsc not found"; exit 1; }
+
+      # ── 6. Build Docker image (validates Dockerfile + compose config) ──────
+      # Build fresh — never pull from a registry — for test isolation.
+      # DOCKER_BUILDKIT=1 enables parallel stage execution for the multi-stage
+      # build (deps → runtime), which cuts build time on the heavy image.
+      - name: Build Docker image
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          echo "Building image from local Dockerfile..."
+          docker compose build --no-cache --progress=plain
+          echo "Image built successfully."
+          docker images
+
+      # ── 7. Start container in the background ──────────────────────────────
+      - name: Start container
+        run: |
+          docker compose up -d
+          echo "Container started. Current state:"
+          docker compose ps
+
+      # ── 8. Health-check polling ────────────────────────────────────────────
+      # Dockerfile HEALTHCHECK: interval=30s, timeout=10s, start_period=15s.
+      # We poll /health directly every 5 s (faster than Docker's own checker)
+      # with a 120 s hard timeout so the job fails fast on a broken image.
+      - name: Wait for container to be healthy
+        shell: bash
+        run: |
+          HEALTH_URL="http://localhost:3000/health"
+          TIMEOUT=120
+          ELAPSED=0
+          SLEEP_INTERVAL=5
+
+          echo "Polling ${HEALTH_URL} every ${SLEEP_INTERVAL}s (timeout: ${TIMEOUT}s)..."
+
+          until curl -sf "$HEALTH_URL" > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+              echo "::error::Container did not become healthy within ${TIMEOUT}s"
+              echo "--- docker compose logs ---"
+              docker compose logs --tail=100
+              exit 1
+            fi
+            echo "  [${ELAPSED}s] Not ready yet, retrying in ${SLEEP_INTERVAL}s..."
+            sleep "$SLEEP_INTERVAL"
+            ELAPSED=$(( ELAPSED + SLEEP_INTERVAL ))
+          done
+
+          echo "Container is healthy after ${ELAPSED}s."
+          curl -s "$HEALTH_URL"
+
+      # ── 9. Run integration tests ───────────────────────────────────────────
+      # NODE_ENV=test — makes the rate-limiter skip() return true, so all
+      # ~33 requests in the test suite are served without hitting the window.
+      # The tests use supertest against require('../../src/server') directly,
+      # not against the Docker container, so no port conflict occurs.
+      - name: Run integration tests
+        id: run-integration-tests
+        working-directory: backend
+        shell: bash
+        env:
+          NODE_ENV: test
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          npm run test:integration -- --ci 2>&1 \
+            | tee "$GITHUB_WORKSPACE/test-results/integration-output.txt"
+
+      # ── 10. Capture container logs (useful post-mortem on failures) ────────
+      - name: Capture container logs
+        if: always()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          docker compose logs --timestamps 2>&1 \
+            > "$GITHUB_WORKSPACE/test-results/container-logs.txt" || true
+
+      # ── 11. Tear down container — always runs ─────────────────────────────
+      - name: Tear down container
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+      # ── 12. Write job summary ─────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          RESULT_FILE="$GITHUB_WORKSPACE/test-results/integration-output.txt"
+          {
+            echo "## Integration Test Results"
+            echo ""
+            if [ "${{ steps.run-integration-tests.outcome }}" = "success" ]; then
+              echo "**Status: PASSED**"
+            else
+              echo "**Status: FAILED**"
+            fi
+            echo ""
+            echo "### Test Output"
+            echo '```'
+            tail -200 "$RESULT_FILE" 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            echo "> Container logs are in the **integration-test-artifacts** artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 13. Upload all test artifacts ─────────────────────────────────────
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-artifacts
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

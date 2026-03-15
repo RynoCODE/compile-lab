@@ -1,0 +1,218 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow 4 — Security Scans
+#
+# Two independent jobs run in parallel every Monday at 00:00 UTC,
+# and can also be triggered on demand with workflow_dispatch.
+#
+#   Job A — dependency-scan
+#     • npm audit  (high + critical)
+#     • actions/dependency-review-action  (on PRs only — requires pull_request
+#       event context; skipped automatically on schedule / manual runs)
+#
+#   Job B — docker-scan
+#     • Pulls ghcr.io/<owner>/<repo>:latest
+#     • Trivy scans for OS-level + library CVEs (CRITICAL, HIGH)
+#     • Uploads SARIF to GitHub Security → Code Scanning dashboard
+#     • Saves the SARIF as a downloadable workflow artifact
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Security Scans
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'    # Every Monday at 00:00 UTC
+  workflow_dispatch:        # Allow on-demand runs from the Actions UI
+
+# Default permissions — overridden per job where elevated access is needed
+permissions:
+  contents: read
+
+jobs:
+  # ── Job A: Dependency Vulnerability Scan ───────────────────────────────────
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read    # Required by dependency-review-action
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install dependencies (needed to build the advisory graph) ─────
+      - name: Install dependencies
+        working-directory: backend
+        run: npm install
+
+      # ── 4. npm audit ─────────────────────────────────────────────────────
+      # --audit-level=high  → exit code 1 on HIGH or CRITICAL vulnerabilities.
+      # --json              → machine-readable output for the artifact.
+      # We run both formats: human-readable (tee to terminal) + JSON artifact.
+      - name: Run npm audit
+        id: npm-audit
+        working-directory: backend
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/security-results"
+
+          echo "--- Human-readable audit ---"
+          npm audit --audit-level=high 2>&1 \
+            | tee "$GITHUB_WORKSPACE/security-results/npm-audit.txt" \
+            || AUDIT_EXIT=$?
+
+          echo "--- JSON audit (artifact) ---"
+          npm audit --json 2>/dev/null \
+            > "$GITHUB_WORKSPACE/security-results/npm-audit.json" || true
+
+          # Propagate the exit code from the human-readable run
+          exit "${AUDIT_EXIT:-0}"
+
+      # ── 5. Dependency review (pull_request events only) ──────────────────
+      # This action compares the base and head manifests of a PR to surface
+      # newly introduced vulnerable packages.  It requires pull_request context
+      # and is silently skipped on schedule / workflow_dispatch runs.
+      - name: Dependency review (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-2.0, AGPL-3.0   # Adjust to your licence policy
+
+      # ── 6. Write job summary ─────────────────────────────────────────────
+      - name: Write dependency scan summary
+        if: always()
+        shell: bash
+        run: |
+          AUDIT_FILE="$GITHUB_WORKSPACE/security-results/npm-audit.txt"
+          {
+            echo "## Dependency Vulnerability Scan"
+            echo ""
+            if [ "${{ steps.npm-audit.outcome }}" = "success" ]; then
+              echo "**npm audit: No HIGH/CRITICAL vulnerabilities found.**"
+            else
+              echo "**npm audit: HIGH/CRITICAL vulnerabilities detected — see output below.**"
+            fi
+            echo ""
+            echo "### npm audit output"
+            echo '```'
+            tail -100 "$AUDIT_FILE" 2>/dev/null || echo "(no output)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 7. Upload audit artifacts ─────────────────────────────────────────
+      - name: Upload npm audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-results
+          path: security-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Job B: Docker Image Vulnerability Scan (runs in parallel with Job A) ───
+  docker-scan:
+    name: Docker Image Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read           # Pull image from GHCR
+      security-events: write   # Upload SARIF to GitHub Security dashboard
+      actions: read            # Required by upload-sarif in private repos
+
+    steps:
+      # ── 1. Checkout (needed for upload-sarif context) ─────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Authenticate to GHCR to pull the latest published image ────────
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 3. Pull the latest image ──────────────────────────────────────────
+      - name: Pull latest image from GHCR
+        shell: bash
+        run: |
+          REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${REPO_LC}:latest"
+          echo "Pulling ${IMAGE}..."
+          docker pull "$IMAGE"
+          echo "IMAGE_REF=${IMAGE}" >> "$GITHUB_ENV"
+
+      # ── 4. Scan with Trivy ────────────────────────────────────────────────
+      # format: sarif    → uploads cleanly to GitHub Security / Code Scanning
+      # severity:        → only surface CRITICAL and HIGH CVEs
+      # exit-code: 0     → report findings without failing the workflow step;
+      #                    the SARIF upload and artifact still happen regardless
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'          # Fail step if CRITICAL/HIGH CVEs found
+          ignore-unfixed: true    # Skip CVEs without available fixes
+
+      # ── 5. Also emit a human-readable table to the Actions log ───────────
+      - name: Print Trivy table to log
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+
+      # ── 6. Upload SARIF to GitHub Security → Code Scanning dashboard ─────
+      # Results appear under Security → Code Scanning in the repository UI.
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()   # Upload even if Trivy found CVEs (exit-code: 1 above)
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-docker-image'
+
+      # ── 7. Save SARIF as a downloadable artifact for audit records ────────
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif-report
+          path: trivy-results.sarif
+          if-no-files-found: warn
+          retention-days: 90    # 90-day retention for compliance audit trail
+
+      # ── 8. Write job summary ─────────────────────────────────────────────
+      - name: Write Docker scan summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Docker Image Vulnerability Scan"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| **Image scanned** | \`${{ env.IMAGE_REF }}\` |"
+            echo "| **Severities filtered** | CRITICAL, HIGH |"
+            echo "| **Unfixed CVEs** | ignored |"
+            echo "| **SARIF uploaded** | GitHub Security → Code Scanning |"
+            echo ""
+            echo "> Full results: **Security** tab → **Code Scanning** → filter by \`trivy-docker-image\`"
+            echo ""
+            echo "> SARIF file is also available as the **trivy-sarif-report** artifact (retained 90 days)."
+          } >> "$GITHUB_STEP_SUMMARY"

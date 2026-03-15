@@ -1,0 +1,157 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Workflow 2 — Integration Tests (Docker)
+#
+# Builds a fresh Docker image, starts the stack with docker compose,
+# waits for the /health endpoint to respond, then runs the Jest integration
+# suite against the live container.  Tear-down always runs so the runner
+# is never left with orphaned containers.
+#
+# Triggers: push to main, and every PR targeting main.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js setup (needed to run the Jest test client) ──────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── 3. Install ALL Node deps (jest + supertest in devDependencies) ─────
+      - name: Install Node.js dependencies
+        working-directory: backend
+        run: npm install
+
+      # ── 4. Build Docker image from local Dockerfile ───────────────────────
+      # Build fresh every run — never pull from a registry — for test isolation.
+      # The multi-stage build is cache-unfriendly on vanilla runners, so we set
+      # DOCKER_BUILDKIT=1 to at least get parallel stage execution.
+      - name: Build Docker image
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          echo "Building image from local Dockerfile..."
+          docker compose build --no-cache --progress=plain
+          echo "Image built successfully."
+          docker images
+
+      # ── 5. Start the container in the background ──────────────────────────
+      - name: Start container
+        run: |
+          docker compose up -d
+          echo "Container started. Current state:"
+          docker compose ps
+
+      # ── 6. Health-check polling ────────────────────────────────────────────
+      # The Dockerfile HEALTHCHECK has start_period=20s, interval=30s.
+      # We poll /health directly every 5 s (faster than Docker's own check)
+      # with a 120 s hard timeout so the job fails fast on broken builds.
+      - name: Wait for service to be healthy
+        shell: bash
+        run: |
+          HEALTH_URL="http://localhost:3000/health"
+          TIMEOUT=120
+          ELAPSED=0
+          SLEEP_INTERVAL=5
+
+          echo "Polling ${HEALTH_URL} every ${SLEEP_INTERVAL}s (timeout: ${TIMEOUT}s)..."
+
+          until curl -sf "$HEALTH_URL" > /dev/null 2>&1; do
+            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+              echo "::error::Service did not become healthy within ${TIMEOUT}s"
+              echo "--- docker compose logs ---"
+              docker compose logs --tail=100
+              exit 1
+            fi
+            echo "  [${ELAPSED}s] Not ready yet, retrying in ${SLEEP_INTERVAL}s..."
+            sleep "$SLEEP_INTERVAL"
+            ELAPSED=$(( ELAPSED + SLEEP_INTERVAL ))
+          done
+
+          echo "Service is healthy after ${ELAPSED}s."
+          # Print the health response for the job log
+          curl -s "$HEALTH_URL" | head -20
+
+      # ── 7. Run integration tests ───────────────────────────────────────────
+      # BASE_URL tells supertest where the live server is.
+      # --ci → non-interactive mode; --runInBand → serial (already in script).
+      - name: Run integration tests
+        id: run-integration-tests
+        working-directory: backend
+        shell: bash
+        env:
+          BASE_URL: 'http://localhost:3000'
+          NODE_ENV: test
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          npm run test:integration -- --ci 2>&1 \
+            | tee "$GITHUB_WORKSPACE/test-results/integration-output.txt"
+
+      # ── 8. Capture container logs as artifact on failure ──────────────────
+      - name: Capture container logs
+        if: always()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          docker compose logs --timestamps 2>&1 \
+            > "$GITHUB_WORKSPACE/test-results/container-logs.txt" || true
+          echo "Container logs saved."
+
+      # ── 9. Tear down container — always runs ──────────────────────────────
+      - name: Tear down container
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans
+          echo "Container torn down."
+
+      # ── 10. Write job summary ─────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          RESULT_FILE="$GITHUB_WORKSPACE/test-results/integration-output.txt"
+          {
+            echo "## Integration Test Results"
+            echo ""
+            if [ "${{ steps.run-integration-tests.outcome }}" = "success" ]; then
+              echo "**Status: PASSED**"
+            else
+              echo "**Status: FAILED**"
+            fi
+            echo ""
+            echo "### Test Output"
+            echo '```'
+            tail -200 "$RESULT_FILE" 2>/dev/null || echo "(no output captured)"
+            echo '```'
+            echo ""
+            echo "> Container logs are available in the **integration-test-artifacts** artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 11. Upload all test artifacts ─────────────────────────────────────
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-artifacts
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

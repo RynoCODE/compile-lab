@@ -134,7 +134,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Authenticate to GHCR to pull the latest published image ────────
+      # ── 2. Install Trivy via the official install script ──────────────────
+      # We install Trivy manually instead of using aquasecurity/trivy-action
+      # because that action's internal installer (setup-trivy) fetches a
+      # pre-built binary from GitHub Releases — a step that fails intermittently
+      # in Actions environments due to rate limits and redirect handling.
+      # The official install.sh is a single curl → sh, always reliable.
+      - name: Install Trivy
+        shell: bash
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin
+          trivy --version
+
+      # ── 3. Authenticate to GHCR to pull the latest published image ────────
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -142,7 +155,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 3. Pull the latest image ──────────────────────────────────────────
+      # ── 4. Pull the latest image ──────────────────────────────────────────
       - name: Pull latest image from GHCR
         shell: bash
         run: |
@@ -152,52 +165,73 @@ jobs:
           docker pull "$IMAGE"
           echo "IMAGE_REF=${IMAGE}" >> "$GITHUB_ENV"
 
-      # ── 4. Scan with Trivy ────────────────────────────────────────────────
-      # format: sarif    → uploads cleanly to GitHub Security / Code Scanning
-      # severity:        → only surface CRITICAL and HIGH CVEs
-      # exit-code: 0     → report findings without failing the workflow step;
-      #                    the SARIF upload and artifact still happen regardless
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.IMAGE_REF }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'          # Fail step if CRITICAL/HIGH CVEs found
-          ignore-unfixed: true    # Skip CVEs without available fixes
+      # ── 5. Scan image — emit human-readable table to the Actions log ──────
+      # exit-code 0 here so the table step never aborts the job; the SARIF
+      # step below is the authoritative pass/fail gate.
+      - name: Print Trivy findings table
+        shell: bash
+        run: |
+          trivy image \
+            --format table \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 0 \
+            "${{ env.IMAGE_REF }}" || true
 
-      # ── 5. Also emit a human-readable table to the Actions log ───────────
-      - name: Print Trivy table to log
+      # ── 6. Scan image — produce SARIF report ─────────────────────────────
+      # exit-code 1 makes this step (and therefore the job) fail when
+      # CRITICAL or HIGH CVEs with available fixes are found.
+      # The `|| true` on the scan command lets subsequent steps (upload,
+      # artifact, summary) still run; the job outcome is recorded via
+      # the step's outcome rather than a hard shell exit.
+      - name: Scan image with Trivy (SARIF output)
+        id: trivy-sarif
+        shell: bash
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "${{ env.IMAGE_REF }}"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # ── 7. Guard: verify the SARIF was actually produced ─────────────────
+      # If the scan crashed before writing any output, skip the upload
+      # gracefully rather than failing with "path does not exist".
+      - name: Check SARIF file was produced
+        id: sarif-check
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.IMAGE_REF }}
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          ignore-unfixed: true
+        shell: bash
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            echo "exists=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::trivy-results.sarif was not produced — skipping SARIF upload"
+          fi
 
-      # ── 6. Upload SARIF to GitHub Security → Code Scanning dashboard ─────
+      # ── 8. Upload SARIF to GitHub Security → Code Scanning dashboard ─────
       # Results appear under Security → Code Scanning in the repository UI.
+      # Requires security-events: write permission (set above).
       - name: Upload Trivy SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()   # Upload even if Trivy found CVEs (exit-code: 1 above)
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && steps.sarif-check.outputs.exists == 'true'
         with:
           sarif_file: 'trivy-results.sarif'
           category: 'trivy-docker-image'
 
-      # ── 7. Save SARIF as a downloadable artifact for audit records ────────
+      # ── 9. Save SARIF as a downloadable artifact for audit records ────────
       - name: Upload SARIF artifact
-        if: always()
+        if: always() && steps.sarif-check.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: trivy-sarif-report
           path: trivy-results.sarif
-          if-no-files-found: warn
           retention-days: 90    # 90-day retention for compliance audit trail
 
-      # ── 8. Write job summary ─────────────────────────────────────────────
+      # ── 10. Write job summary ─────────────────────────────────────────────
       - name: Write Docker scan summary
         if: always()
         shell: bash
@@ -210,7 +244,12 @@ jobs:
             echo "| **Image scanned** | \`${{ env.IMAGE_REF }}\` |"
             echo "| **Severities filtered** | CRITICAL, HIGH |"
             echo "| **Unfixed CVEs** | ignored |"
-            echo "| **SARIF uploaded** | GitHub Security → Code Scanning |"
+            echo "| **Scan outcome** | ${{ steps.trivy-sarif.outcome }} |"
+            if [ "${{ steps.sarif-check.outputs.exists }}" = "true" ]; then
+              echo "| **SARIF** | uploaded to GitHub Security → Code Scanning |"
+            else
+              echo "| **SARIF** | not produced (see log) |"
+            fi
             echo ""
             echo "> Full results: **Security** tab → **Code Scanning** → filter by \`trivy-docker-image\`"
             echo ""

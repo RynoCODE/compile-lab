@@ -4,7 +4,7 @@
  * Integration tests for the Express API (/api/compile and /health).
  *
  * Spins up the Express app via supertest (no real port).
- * All toolchains (javac/java, python3, gcc, g++) must be on PATH.
+ * All toolchains (javac/java, python3, gcc, g++, node, tsc) must be on PATH.
  *
  * Sections:
  *   • /health
@@ -12,6 +12,9 @@
  *   • Python — success, stdin, error, timeout
  *   • C      — success, stdin, compile error, timeout
  *   • C++    — success, stdin, compile error, timeout
+ *   • JavaScript — success, syntax error
+ *   • TypeScript  — success, type error
+ *   • C strictWarnings — warning-as-error
  *   • Multi-language validation — unsupported language, missing fields
  */
 
@@ -414,6 +417,102 @@ describe('POST /api/compile — C++', () => {
     expect(res.body.stage).toBe('timeout');
     expect(Date.now() - start).toBeLessThan(10_000);
   }, 20_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// JAVASCRIPT
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — JavaScript', () => {
+
+  test('runs Hello World and returns correct output', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'javascript',
+        sourceCode: 'console.log("Hello, World!");',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('Hello, World!');
+    expect(res.body.stage).toBe('execution');
+    expect(typeof res.body.executionTime).toBe('number');
+  });
+
+  test('returns success=false for JS syntax error', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'javascript',
+        sourceCode: 'function bad( { console.log("oops"); }',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('execution');
+    expect(res.body.error).toMatch(/SyntaxError/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TYPESCRIPT
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — TypeScript', () => {
+
+  test('compiles and runs typed Hello World', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'typescript',
+        sourceCode: 'const msg: string = "Hello, World!";\nconsole.log(msg);',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.output.trim()).toBe('Hello, World!');
+    expect(res.body.stage).toBe('execution');
+    expect(typeof res.body.executionTime).toBe('number');
+  });
+
+  test('returns success=false and compilation stage for TS type error', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language  : 'typescript',
+        sourceCode: 'const x: number = "hello";',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.stage).toBe('compilation');
+    expect(res.body.error).toMatch(/error/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// C — strictWarnings
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/compile — C strictWarnings', () => {
+
+  test('unused variable + strictWarnings:true shows warning but still runs', async () => {
+    const res = await request(app)
+      .post('/api/compile')
+      .send({
+        language       : 'c',
+        sourceCode     : '#include <stdio.h>\nint main() { int x; printf("Hello\\n"); return 0; }',
+        strictWarnings : true,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.stage).toBe('execution');
+    expect(res.body.output.trim()).toBe('Hello');
+    // -Wall surfaces the unused-variable warning in the error field
+    expect(res.body.error).toMatch(/unused/i);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

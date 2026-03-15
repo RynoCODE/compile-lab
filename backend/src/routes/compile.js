@@ -21,16 +21,28 @@ const compileLimiter = rateLimit({
 // ─── POST /api/compile ────────────────────────────────────────────────────────
 /**
  * Body (JSON):
- *   sourceCode {string}  — required, max 50 KB
- *   language   {string}  — optional, default "java"
- *                          one of: java | python | c | cpp
- *   stdin      {string}  — optional, max 4 KB
+ *   sourceCode      {string}  — required, max 50 KB
+ *   language        {string}  — optional, default "java"
+ *                              one of: java | python | c | cpp | javascript | typescript
+ *   stdin           {string}  — optional, max 4 KB
+ *   strictWarnings  {boolean} — optional, default false
+ *                              when true AND language is "c" or "cpp", appends
+ *                              -Wall to the compiler command so that warnings
+ *                              are surfaced to the user. The binary is still
+ *                              built and executed; warning text appears in the
+ *                              response error field alongside program output.
+ *                              Ignored for all other languages.
  *
  * Response (JSON):
  *   { success, output, error, stage, executionTime }
  */
 router.post('/', compileLimiter, async (req, res) => {
-  const { sourceCode, stdin = '', language = 'java' } = req.body;
+  const {
+    sourceCode,
+    stdin          = '',
+    language       = 'java',
+    strictWarnings = false,
+  } = req.body;
 
   // ── sourceCode validation ─────────────────────────────────────────────────
   if (!sourceCode || typeof sourceCode !== 'string') {
@@ -84,7 +96,9 @@ router.post('/', compileLimiter, async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const result        = await compileAndRun(sourceCode, stdin, language);
+    const result        = await compileAndRun(sourceCode, stdin, language, {
+      strictWarnings: !!strictWarnings,
+    });
     const executionTime = Date.now() - startTime;
 
     return res.status(200).json({ ...result, executionTime });

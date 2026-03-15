@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Online multi-language compiler — write, compile, and run Java, Python, C, and C++ code in your browser." />
-  <title>Online Code Compiler — Java, Python, C, C++</title>
+  <meta name="description" content="Online multi-language compiler — write, compile, and run Java, Python, C, C++, JavaScript, and TypeScript code in your browser." />
+  <title>Online Code Compiler — Java, Python, C, C++, JavaScript, TypeScript</title>
 
   <!-- Preconnect to CDN for faster Monaco load -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
@@ -46,6 +46,8 @@
         <option value="python">Python 3</option>
         <option value="c">C (gcc)</option>
         <option value="cpp">C++ (g++)</option>
+        <option value="javascript">JavaScript</option>
+        <option value="typescript">TypeScript</option>
       </select>
 
       <!-- ── Example snippets (language-aware) ───────────────────── -->
@@ -72,7 +74,26 @@
         <option value="cpp_hello"        data-lang="cpp">Hello World</option>
         <option value="cpp_cin"          data-lang="cpp">Read User Input</option>
         <option value="cpp_infinite"     data-lang="cpp">Infinite Loop (demo)</option>
+        <!-- JavaScript examples -->
+        <option value="js_hello"         data-lang="javascript">Hello World</option>
+        <option value="js_arrow"         data-lang="javascript">Arrow Functions</option>
+        <option value="js_infinite"      data-lang="javascript">Infinite Loop (demo)</option>
+        <!-- TypeScript examples -->
+        <option value="ts_hello"         data-lang="typescript">Hello World</option>
+        <option value="ts_interface"     data-lang="typescript">Interface & Types</option>
+        <option value="ts_infinite"      data-lang="typescript">Infinite Loop (demo)</option>
       </select>
+
+      <!-- ── Show Warnings toggle (C / C++ only) ──────────────────── -->
+      <!-- Visibility is controlled by JS: shown only for C and C++ -->
+      <label id="strict-warnings-label" class="strict-warnings"
+             title="Enables -Wall: shows compiler warnings without treating them as errors. Your program will still compile and run."
+             aria-label="Show compiler warnings (-Wall) for C/C++">
+        <input type="checkbox" id="strict-warnings-toggle"
+               aria-checked="false" />
+        <span class="strict-warnings__pill" aria-hidden="true"></span>
+        <span class="strict-warnings__text">Show Warnings</span>
+      </label>
 
       <!-- ── Theme toggle ─────────────────────────────────────────── -->
       <button id="btn-theme" class="btn-icon" title="Switch to Light Theme"

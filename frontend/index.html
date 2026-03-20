@@ -129,7 +129,12 @@
 
       <div class="panel__header">
         <!-- Filename updates dynamically via JS when language changes -->
-        <span id="editor-filename">HelloWorld.java</span>
+        <span id="editor-filename" style="display: none;">HelloWorld.java</span>
+        <!-- Java-only filename input logic -->
+        <input type="text" id="java-class-name" placeholder="ClassName" spellcheck="false" value="HelloWorld"
+               style="display: inline-block; background: transparent; border: 1px solid var(--border); color: inherit; padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 0.9em; width: 140px;" />
+        <span id="java-ext" style="display: inline-block; opacity: 0.7; font-family: monospace; font-size: 0.9em;">.java</span>
+
         <div class="panel__header-actions">
           <button id="btn-copy-code" class="panel__header-btn"
                   title="Copy source code" aria-label="Copy code">

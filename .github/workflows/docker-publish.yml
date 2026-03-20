@@ -104,7 +104,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          cache-to: type=gha,mode=max
           # Provenance and SBOM attestations (free in GHCR)
           provenance: true
           sbom: true

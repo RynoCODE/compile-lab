@@ -1,5 +1,7 @@
 # Compile-Lab — Multi-Language Online Compiler
 
+[![Build & Publish Docker Image](https://github.com/RynoCODE/compile-lab/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/RynoCODE/compile-lab/actions/workflows/docker-publish.yml)
+
 > A self-hosted, browser-based code compiler and runner supporting Java, Python, C, C++, JavaScript, and TypeScript. Built with Node.js, Monaco Editor, and Docker.
 
 ---

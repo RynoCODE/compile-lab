@@ -431,17 +431,36 @@ async function compileAndRun(sourceCode, stdin = '', language = 'java', options 
     return { success: false, output: '', error: 'Source code is empty.', stage: 'validation' };
   }
 
-  // ── 2. Java-specific: must have a class declaration (determines filename) ──
+  // ── 2. Java-specific: Determine filename/class name ────────────────────────
   let className = null;
   if (language === 'java') {
-    className = extractClassName(trimmed);
+    // Priority 1: User-provided filename (if any)
+    if (options.fileName && options.fileName.trim()) {
+      let name = options.fileName.trim();
+      // "Input includes '.java' extension already → strip it"
+      if (name.endsWith('.java')) {
+        name = name.slice(0, -5);
+      }
+
+      // "Input contains spaces or special characters → sanitize or reject"
+      if (!/^[A-Za-z_$][A-Za-z\d_$]*$/.test(name)) {
+        return {
+          success: false,
+          output : '',
+          error  : 'Invalid Class Name. usage: letters, numbers, _, $',
+          stage  : 'validation',
+        };
+      }
+      className = name;
+    }
+    // Priority 2: Attempt auto-detection
+    else {
+      className = extractClassName(trimmed);
+    }
+
+    // "Empty or blank input → fall back to 'Main.java'"
     if (!className) {
-      return {
-        success: false,
-        output : '',
-        error  : 'Could not detect a Java class. Make sure your code contains at least one `class` definition.',
-        stage  : 'validation',
-      };
+      className = 'Main';
     }
   }
 

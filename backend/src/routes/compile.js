@@ -44,6 +44,7 @@ router.post('/', compileLimiter, async (req, res) => {
     sourceCode,
     stdin          = '',
     language       = 'java',
+    fileName       = '', // Optional filename/class name override (Java only)
     strictWarnings = false,
   } = req.body;
 
@@ -101,6 +102,7 @@ router.post('/', compileLimiter, async (req, res) => {
   try {
     const result        = await compileAndRun(sourceCode, stdin, language, {
       strictWarnings: !!strictWarnings,
+      fileName,
     });
     const executionTime = Date.now() - startTime;
 

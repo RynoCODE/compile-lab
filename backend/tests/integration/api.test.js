@@ -564,7 +564,7 @@ describe('POST /api/compile — input validation (multi-language)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(false);
-    expect(res.body.stage).toBe('validation');
+    expect(res.body.stage).toBe('compilation');
   });
 
   test('returns 404 for unknown API routes', async () => {

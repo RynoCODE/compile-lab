@@ -231,7 +231,10 @@ describe('Java — compileAndRun()', () => {
   test('10. rejects source with no class definition', async () => {
     const result = await compileAndRun('int x = 5 + 3;');
     expect(result.success).toBe(false);
-    expect(result.stage).toBe('validation');
+    // With the new "fallback to Main.java" rule, invalid source is now
+    // passed to javac instead of being rejected early, so the error
+    // stage changes from 'validation' to 'compilation'.
+    expect(result.stage).toBe('compilation');
   });
 
   test('11. rejects null source code', async () => {

@@ -282,6 +282,8 @@ const $editorPanel = document.getElementById('editor-panel');
 const $outputPanel = document.getElementById('output-panel');
 const $resizer     = document.getElementById('resizer');
 const $editorFilename = document.getElementById('editor-filename');
+const $javaClassInput = document.getElementById('java-class-name');
+const $javaExt        = document.getElementById('java-ext');
 // Strict Warnings toggle (C / C++ only)
 const $strictLabel  = document.getElementById('strict-warnings-label');
 const $strictToggle = document.getElementById('strict-warnings-toggle');
@@ -291,6 +293,12 @@ let monacoEditor    = null;
 let isRunning       = false;
 let isDarkTheme     = true;
 let currentLanguage = 'java';
+
+/**
+ * Cache all example options on startup so we can filter them by rebuilding the <select>.
+ * This is more robust than using `hidden` or `display: none` which some browsers ignore.
+ */
+const ALL_EXAMPLE_OPTIONS = Array.from($exampleSel.querySelectorAll('option[data-lang]'));
 
 // ─── Monaco bootstrap ─────────────────────────────────────────────────────────
 require.config({
@@ -344,6 +352,17 @@ function switchLanguage(lang) {
   $editorFilename.textContent = cfg.filename;
   $footerLangTxt.textContent  = cfg.label;
 
+  if (lang === 'java') {
+    $editorFilename.style.display = 'none';
+    $javaClassInput.style.display = 'inline-block';
+    $javaExt.style.display        = 'inline-block';
+    if (!$javaClassInput.value) $javaClassInput.value = 'HelloWorld';
+  } else {
+    $editorFilename.style.display = 'inline';
+    $javaClassInput.style.display = 'none';
+    $javaExt.style.display        = 'none';
+  }
+
   // Show Strict Warnings toggle only for C and C++;
   // reset it whenever switching away so state doesn't persist unexpectedly.
   const isCC = lang === 'c' || lang === 'cpp';
@@ -363,9 +382,16 @@ function switchLanguage(lang) {
 
 /** Show only example <option> elements that match the active language */
 function filterExamples(lang) {
-  const options = $exampleSel.querySelectorAll('option[data-lang]');
-  options.forEach((opt) => {
-    opt.hidden = opt.dataset.lang !== lang;
+  // Clear current options except the placeholder
+  const placeholder = $exampleSel.querySelector('option[value=""]');
+  $exampleSel.innerHTML = '';
+  if (placeholder) $exampleSel.appendChild(placeholder);
+
+  // Append matching options from our cache
+  ALL_EXAMPLE_OPTIONS.forEach((opt) => {
+    if (opt.dataset.lang === lang) {
+      $exampleSel.appendChild(opt);
+    }
   });
   $exampleSel.value = ''; // reset selection
 }
@@ -377,6 +403,7 @@ async function runCode() {
   const sourceCode     = monacoEditor.getValue();
   const stdin          = $stdinArea.value;
   const strictWarnings = $strictToggle.checked;
+  const fileName       = $javaClassInput.value;
 
   if (!sourceCode.trim()) {
     renderOutput({ success: false, error: 'Editor is empty.', stage: 'validation' });
@@ -395,6 +422,7 @@ async function runCode() {
         language: currentLanguage,
         stdin,
         strictWarnings,
+        fileName,
       }),
     });
 
@@ -544,6 +572,12 @@ $exampleSel.addEventListener('change', () => {
   }
 
   monacoEditor.setValue(ex.code);
+
+  // Auto-update Java filename input to match the public class name in the example
+  if (currentLanguage === 'java') {
+    const match = ex.code.match(/public\s+class\s+(\w+)/);
+    if (match) $javaClassInput.value = match[1];
+  }
 
   if (ex.stdin) {
     $stdinArea.value = ex.stdin;

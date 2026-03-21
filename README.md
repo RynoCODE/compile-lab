@@ -1,6 +1,8 @@
 # Compile-Lab — Multi-Language Online Compiler
 
 [![Build & Publish Docker Image](https://github.com/RynoCODE/compile-lab/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/RynoCODE/compile-lab/actions/workflows/docker-publish.yml)
+[![Docker AMD64](https://img.shields.io/badge/docker-amd64-blue?logo=docker)](https://github.com/RynoCODE/compile-lab/pkgs/container/compile-lab)
+[![Docker ARM64](https://img.shields.io/badge/docker-arm64-blue?logo=docker)](https://github.com/RynoCODE/compile-lab/pkgs/container/compile-lab-arm)
 
 > A self-hosted, browser-based code compiler and runner supporting Java, Python, C, C++, JavaScript, and TypeScript. Built with Node.js, Monaco Editor, and Docker.
 
@@ -18,6 +20,24 @@
 - **Execution timing** — see how long your program ran
 - **Keyboard shortcuts** — `Ctrl+Enter` to run, `Ctrl+L` to clear output
 - **Security-hardened** — sandboxed Docker container, non-root execution, read-only filesystem
+
+---
+
+## Docker Images
+
+Pre-built Docker images are published to GitHub Container Registry (GHCR) for both architectures:
+
+| Architecture | Image Name | Use Case |
+|--------------|------------|----------|
+| **AMD64/x86_64** | `ghcr.io/rynocode/compile-lab:latest` | Intel/AMD processors, most cloud VMs |
+| **ARM64** | `ghcr.io/rynocode/compile-lab-arm:latest` | Apple Silicon (M1/M2/M3), AWS Graviton, Raspberry Pi |
+
+Both images are built natively (no QEMU emulation) on GitHub Actions, ensuring optimal performance and faster build times.
+
+**Version Tags:**
+- `latest` — latest stable release
+- `v1.2.3` — specific version tag
+- `sha-abc1234` — specific commit SHA
 
 ---
 
@@ -40,13 +60,45 @@
 
 - [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/)
 
-### Run with Docker Compose
+### Option 1: Run with Pre-built Docker Images
+
+Pre-built images are available on GitHub Container Registry for both architectures:
+
+**For AMD64/x86_64 systems:**
+```bash
+docker pull ghcr.io/rynocode/compile-lab:latest
+docker run -d -p 3000:3000 --name code-compiler \
+  --security-opt=no-new-privileges:true \
+  --cap-drop=ALL \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,size=100m \
+  --memory=512m \
+  --cpus=2 \
+  ghcr.io/rynocode/compile-lab:latest
+```
+
+**For ARM64 systems (e.g., Apple Silicon, AWS Graviton):**
+```bash
+docker pull ghcr.io/rynocode/compile-lab-arm:latest
+docker run -d -p 3000:3000 --name code-compiler \
+  --security-opt=no-new-privileges:true \
+  --cap-drop=ALL \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,size=100m \
+  --memory=512m \
+  --cpus=2 \
+  ghcr.io/rynocode/compile-lab-arm:latest
+```
+
+Then open **http://localhost:3000** in your browser.
+
+### Option 2: Build and Run with Docker Compose
 
 ```bash
-git clone <your-repo-url>
-cd java-compiler
+git clone https://github.com/RynoCODE/compile-lab.git
+cd compile-lab
 
-docker compose up -d
+docker compose up -d --build
 ```
 
 Then open **http://localhost:3000** in your browser.
@@ -105,7 +157,7 @@ Returns `{ "status": "ok", "timestamp": "..." }` — used by Docker healthcheck.
 ## Architecture
 
 ```
-java-compiler/
+compile-lab/
 ├── Dockerfile                 # Multi-stage build (deps → runtime)
 ├── docker-compose.yml         # Container config with security hardening
 ├── frontend/
@@ -206,6 +258,12 @@ Environment variables (set in `docker-compose.yml` or a `.env` file):
 ## Docker Tips
 
 ```bash
+# Pull the latest pre-built image (AMD64)
+docker pull ghcr.io/rynocode/compile-lab:latest
+
+# Pull the latest pre-built image (ARM64)
+docker pull ghcr.io/rynocode/compile-lab-arm:latest
+
 # Rebuild after code changes
 docker compose down && docker compose up -d --build
 

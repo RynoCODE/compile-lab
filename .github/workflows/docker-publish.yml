@@ -15,6 +15,13 @@ on:
         type: choice
         options: ['true', 'false']
 
+# Multi-architecture builds:
+#   - AMD64 builds on ubuntu-latest (x86_64)
+#   - ARM64 builds on ubuntu-24.04-arm (native ARM, no QEMU)
+# Both jobs run in parallel for fast builds and publish to separate images:
+#   - ghcr.io/<owner>/compile-lab       (amd64)
+#   - ghcr.io/<owner>/compile-lab-arm   (arm64)
+
 permissions:
   packages: write
   contents: read
@@ -76,6 +83,9 @@ jobs:
         run: |
           {
             echo "## compile-lab (amd64) Published"
+            echo ""
+            echo "Built natively on x86_64 runner"
+            echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| **Image** | \`ghcr.io/${{ github.repository_owner }}/compile-lab\` |"
@@ -86,7 +96,7 @@ jobs:
   # ── ARM64 ──────────────────────────────────────────────────────────────────
   build-arm64:
     name: Build and push (arm64) → compile-lab-arm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     outputs:
       image-digest: ${{ steps.build-push.outputs.digest }}
@@ -94,9 +104,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -142,6 +149,9 @@ jobs:
         run: |
           {
             echo "## compile-lab-arm (arm64) Published"
+            echo ""
+            echo "Built natively on ARM64 runner (no QEMU emulation)"
+            echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| **Image** | \`ghcr.io/${{ github.repository_owner }}/compile-lab-arm\` |"

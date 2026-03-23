@@ -355,8 +355,8 @@ async function runTypeScript(source, stdin, tempDir) {
       [
         '--strict',
         '--target', 'ES2020',
-        '--module', 'commonjs',
-        '--moduleResolution', 'node',
+        '--module', 'Node16',
+        '--moduleResolution', 'Node16',
         '--outDir', tempDir,
         sourceFile,
       ],

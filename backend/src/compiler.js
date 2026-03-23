@@ -42,6 +42,7 @@ const MAX_OUTPUT_BYTES   = 100_000; // 100 KB combined stdout+stderr cap
 const TEMP_ROOT = (process.platform === 'linux' && fs.existsSync('/dev/shm'))
   ? '/dev/shm'
   : os.tmpdir();
+console.log(`[Compiler] Initialized. Using temp directory: ${TEMP_ROOT}`);
 
 const SUPPORTED_LANGUAGES = ['java', 'python', 'c', 'cpp', 'javascript', 'typescript'];
 
@@ -104,6 +105,7 @@ function spawnAsync(cmd, args, opts) {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (timedOut) {
+        console.warn(`[Execution] Process ${child.pid} timed out (${timeoutMs}ms)`);
         return reject({
           type   : 'TIMEOUT',
           message: 'Execution timed out after 5 seconds. Your program may contain an infinite loop.',
@@ -124,11 +126,12 @@ function spawnAsync(cmd, args, opts) {
 /**
  * Generate SHA-256 cache key from language + sourceCode + stdin.
  */
-function getCacheKey(language, sourceCode, stdin) {
+function getCacheKey(language, sourceCode, stdin, strictWarnings) {
   const hash = crypto.createHash('sha256');
   hash.update(language);
   hash.update(sourceCode);
   hash.update(stdin);
+  hash.update(String(strictWarnings));
   return hash.digest('hex');
 }
 
@@ -351,7 +354,6 @@ async function runTypeScript(source, stdin, tempDir) {
       'tsc',
       [
         '--strict',
-        '--noEmit', 'false',
         '--target', 'ES2020',
         '--module', 'commonjs',
         '--moduleResolution', 'node',
@@ -419,7 +421,7 @@ function makeCompiledRunner({ ext, compiler, extraFlags = [] }) {
     // not block execution; they are forwarded to the user alongside the output.
     const compileFlags = strictWarnings
       ? [...extraFlags, '-Wall']
-      : extraFlags;
+      : [...extraFlags, '-w'];
 
     // ── Compile ──────────────────────────────────────────────────────────────
     let compileResult;
@@ -508,27 +510,27 @@ const runCpp = makeCompiledRunner({ ext: '.cpp',  compiler: 'g++'               
 async function compileAndRun(sourceCode, stdin = '', language = 'java', options = {}) {
   const { strictWarnings = false } = options;
 
-  // ── 1. Check cache ─────────────────────────────────────────────────────────
-  const cacheKey = getCacheKey(language, sourceCode, stdin);
-  const cached = getCachedResult(cacheKey);
-  if (cached) {
-    // Cache hit — return instantly without spawning any process
-    return { ...cached, _tempDir: null };
-  }
-
-  // ── 2. Common validation ───────────────────────────────────────────────────
+  // ── 1. Validation ──────────────────────────────────────────────────────────
   if (!sourceCode || typeof sourceCode !== 'string') {
-    const result = { success: false, output: '', error: 'No source code provided.', stage: 'validation' };
-    setCachedResult(cacheKey, result);
-    return { ...result, _tempDir: null };
+    // Cannot cache null/invalid keys easily, so just return
+    return { success: false, output: '', error: 'No source code provided.', stage: 'validation', _tempDir: null };
   }
 
   const trimmed = sourceCode.trim();
   if (trimmed.length === 0) {
-    const result = { success: false, output: '', error: 'Source code is empty.', stage: 'validation' };
-    setCachedResult(cacheKey, result);
-    return { ...result, _tempDir: null };
+    // Can calculate hash of empty string if we wanted, but let's just fail fast
+    return { success: false, output: '', error: 'Source code is empty.', stage: 'validation', _tempDir: null };
   }
+
+  // ── 2. Check cache ─────────────────────────────────────────────────────────
+  const cacheKey = getCacheKey(language, trimmed, stdin, strictWarnings);
+  const cached = getCachedResult(cacheKey);
+  if (cached) {
+    console.log(`[Cache] HIT for ${language} (Key: ${cacheKey.substring(0, 8)}...)`);
+    // Cache hit — return instantly without spawning any process
+    return { ...cached, _tempDir: null };
+  }
+  console.log(`[Cache] MISS for ${language} - Compiling...`);
 
   // ── 3. Java-specific: Determine filename/class name ────────────────────────
   let className = null;

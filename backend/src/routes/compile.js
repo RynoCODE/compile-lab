@@ -106,6 +106,7 @@ router.post('/', compileLimiter, async (req, res) => {
       fileName,
     });
     const executionTime = Date.now() - startTime;
+    console.log(`[${req.ip}] ${language} - ${executionTime}ms - Success: ${result.success}`);
 
     // Extract tempDir for cleanup, but don't expose it to the user
     const { _tempDir, ...publicResult } = result;

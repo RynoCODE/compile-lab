@@ -1,6 +1,7 @@
 'use strict';
 
 const express                             = require('express');
+const fs                                  = require('fs');
 const rateLimit                           = require('express-rate-limit');
 const { compileAndRun, SUPPORTED_LANGUAGES } = require('../compiler');
 
@@ -106,7 +107,17 @@ router.post('/', compileLimiter, async (req, res) => {
     });
     const executionTime = Date.now() - startTime;
 
-    return res.status(200).json({ ...result, executionTime });
+    // Extract tempDir for cleanup, but don't expose it to the user
+    const { _tempDir, ...publicResult } = result;
+
+    // Send response first (critical path)
+    res.status(200).json({ ...publicResult, executionTime });
+
+    // Cleanup after response is sent (non-blocking)
+    if (_tempDir) {
+      fs.promises.rm(_tempDir, { recursive: true, force: true })
+        .catch((err) => console.error('[cleanup] Failed to remove temp directory:', err));
+    }
   } catch (err) {
     console.error('[/api/compile] Unexpected error:', err);
     return res.status(500).json({

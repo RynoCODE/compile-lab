@@ -17,7 +17,7 @@
  *   - Output is capped at MAX_OUTPUT_BYTES (100 KB) to prevent exhaustion.
  *   - UUID-namespaced temp dirs prevent filename/race collisions.
  *   - 5-second SIGKILL timeout kills infinite loops in every language.
- *   - temp dir is always deleted in a finally block.
+ *   - temp dir is always deleted after response is sent.
  *
  * strictWarnings (C / C++ only):
  *   When options.strictWarnings === true, -Wall is appended to the gcc/g++
@@ -28,6 +28,7 @@
  */
 
 const { spawn }      = require('child_process');
+const crypto         = require('crypto');
 const fs             = require('fs');
 const path           = require('path');
 const os             = require('os');
@@ -37,9 +38,21 @@ const { v4: uuidv4 } = require('uuid');
 const COMPILE_TIMEOUT_MS = 10_000;  // javac / gcc / g++ / tsc get 10 s
 const RUN_TIMEOUT_MS     =  5_000;  // execution gets  5 s  (kills infinite loops)
 const MAX_OUTPUT_BYTES   = 100_000; // 100 KB combined stdout+stderr cap
-const TEMP_ROOT          = os.tmpdir();
+// Use RAM (/dev/shm) on Linux if available, else system temp
+const TEMP_ROOT = (process.platform === 'linux' && fs.existsSync('/dev/shm'))
+  ? '/dev/shm'
+  : os.tmpdir();
 
 const SUPPORTED_LANGUAGES = ['java', 'python', 'c', 'cpp', 'javascript', 'typescript'];
+
+// ── Result cache (LRU with 60-second TTL) ─────────────────────────────────────
+const CACHE_MAX_SIZE = 50;      // Maximum 50 cached results
+const CACHE_TTL_MS   = 60_000;  // 60-second time-to-live
+
+const resultCache = new Map();  // LRU cache: insertion order = access order
+
+// ── Module-level regex cache ──────────────────────────────────────────────────
+const regexCache = new Map();
 
 // ── Core spawn helper ─────────────────────────────────────────────────────────
 
@@ -106,15 +119,75 @@ function spawnAsync(cmd, args, opts) {
   });
 }
 
+// ── Result cache helpers ──────────────────────────────────────────────────────
+
+/**
+ * Generate SHA-256 cache key from language + sourceCode + stdin.
+ */
+function getCacheKey(language, sourceCode, stdin) {
+  const hash = crypto.createHash('sha256');
+  hash.update(language);
+  hash.update(sourceCode);
+  hash.update(stdin);
+  return hash.digest('hex');
+}
+
+/**
+ * Retrieve cached result if available and not expired.
+ * Updates LRU position on cache hit (moves to end of Map).
+ */
+function getCachedResult(key) {
+  const entry = resultCache.get(key);
+  if (!entry) return null;
+
+  // Check TTL expiration
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    resultCache.delete(key);
+    return null;
+  }
+
+  // LRU: Move to end (most recently used)
+  resultCache.delete(key);
+  resultCache.set(key, entry);
+
+  return entry.result;
+}
+
+/**
+ * Store result in cache with LRU eviction.
+ * Evicts the oldest (first) entry when cache reaches capacity.
+ */
+function setCachedResult(key, result) {
+  // Evict LRU entry if at capacity
+  if (resultCache.size >= CACHE_MAX_SIZE) {
+    const oldestKey = resultCache.keys().next().value;
+    resultCache.delete(oldestKey);
+  }
+
+  resultCache.set(key, {
+    result,
+    timestamp: Date.now(),
+  });
+}
+
 // ── Path sanitizer ────────────────────────────────────────────────────────────
 
 /**
  * Strip the UUID temp-dir prefix from compiler error messages so users see
  * clean paths like `program.c:4: error: ...` instead of filesystem paths.
+ * Caches the compiled RegExp for performance; evicts after use.
  */
 function sanitizePaths(text, tempDir) {
-  const escaped = tempDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(new RegExp(escaped + path.sep + '?', 'g'), '').trim();
+  let regex = regexCache.get(tempDir);
+  if (!regex) {
+    const escaped = tempDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    regex = new RegExp(escaped + path.sep + '?', 'g');
+    regexCache.set(tempDir, regex);
+  }
+  const result = text.replace(regex, '').trim();
+  // Evict after use since tempDirs are UUID-based and never reused
+  regexCache.delete(tempDir);
+  return result;
 }
 
 // ── Java-specific helper ──────────────────────────────────────────────────────
@@ -146,12 +219,16 @@ function extractClassName(source) {
 
 async function runJava(source, stdin, tempDir, className) {
   const javaFile = path.join(tempDir, `${className}.java`);
-  fs.writeFileSync(javaFile, source, 'utf8');
+  await fs.promises.writeFile(javaFile, source, 'utf8');
 
   // ── Compile ────────────────────────────────────────────────────────────────
   let compileResult;
   try {
-    compileResult = await spawnAsync('javac', [javaFile], {
+    compileResult = await spawnAsync('javac', [
+      '-J-XX:TieredStopAtLevel=1',
+      '-J-Xshare:on',
+      javaFile
+    ], {
       cwd      : tempDir,
       timeoutMs: COMPILE_TIMEOUT_MS,
     });
@@ -176,7 +253,16 @@ async function runJava(source, stdin, tempDir, className) {
   try {
     runResult = await spawnAsync(
       'java',
-      ['-cp', tempDir, '-Xmx256m', '-Xss512k', className],
+      [
+        '-cp', tempDir,
+        '-Xmx256m',
+        '-Xss512k',
+        '-XX:TieredStopAtLevel=1',
+        '-XX:+UseSerialGC',
+        '-Xshare:on',
+        '-XX:CICompilerCount=2',
+        className
+      ],
       { cwd: tempDir, timeoutMs: RUN_TIMEOUT_MS, stdinData: stdin }
     );
   } catch (err) {
@@ -196,7 +282,7 @@ async function runJava(source, stdin, tempDir, className) {
 
 async function runPython(source, stdin, tempDir) {
   const sourceFile = path.join(tempDir, 'program.py');
-  fs.writeFileSync(sourceFile, source, 'utf8');
+  await fs.promises.writeFile(sourceFile, source, 'utf8');
 
   // Python is interpreted — no separate compile phase.
   // Syntax errors surface as non-zero exit + stderr during execution.
@@ -224,7 +310,7 @@ async function runPython(source, stdin, tempDir) {
 
 async function runJavaScript(source, stdin, tempDir) {
   const sourceFile = path.join(tempDir, 'program.js');
-  fs.writeFileSync(sourceFile, source, 'utf8');
+  await fs.promises.writeFile(sourceFile, source, 'utf8');
 
   // JavaScript is interpreted by Node — syntax errors surface at execution time.
   let result;
@@ -251,7 +337,7 @@ async function runJavaScript(source, stdin, tempDir) {
 
 async function runTypeScript(source, stdin, tempDir) {
   const sourceFile = path.join(tempDir, 'program.ts');
-  fs.writeFileSync(sourceFile, source, 'utf8');
+  await fs.promises.writeFile(sourceFile, source, 'utf8');
 
   // ── Compile with tsc ───────────────────────────────────────────────────────
   // --strict         : enables all strict type-checks (noImplicitAny etc.)
@@ -326,7 +412,7 @@ function makeCompiledRunner({ ext, compiler, extraFlags = [] }) {
   return async function runCompiled(source, stdin, tempDir, strictWarnings = false) {
     const sourceFile = path.join(tempDir, `program${ext}`);
     const outputBin  = path.join(tempDir, 'program');
-    fs.writeFileSync(sourceFile, source, 'utf8');
+    await fs.promises.writeFile(sourceFile, source, 'utf8');
 
     // When showWarnings is requested, append -Wall so the compiler surfaces
     // all common warnings. -Werror is intentionally NOT added — warnings do
@@ -415,23 +501,36 @@ const runCpp = makeCompiledRunner({ ext: '.cpp',  compiler: 'g++'               
  *   success : boolean,
  *   output  : string,
  *   error   : string,
- *   stage   : 'validation' | 'compilation' | 'execution' | 'timeout'
+ *   stage   : 'validation' | 'compilation' | 'execution' | 'timeout',
+ *   _tempDir: string
  * }>}
  */
 async function compileAndRun(sourceCode, stdin = '', language = 'java', options = {}) {
   const { strictWarnings = false } = options;
 
-  // ── 1. Common validation ───────────────────────────────────────────────────
+  // ── 1. Check cache ─────────────────────────────────────────────────────────
+  const cacheKey = getCacheKey(language, sourceCode, stdin);
+  const cached = getCachedResult(cacheKey);
+  if (cached) {
+    // Cache hit — return instantly without spawning any process
+    return { ...cached, _tempDir: null };
+  }
+
+  // ── 2. Common validation ───────────────────────────────────────────────────
   if (!sourceCode || typeof sourceCode !== 'string') {
-    return { success: false, output: '', error: 'No source code provided.', stage: 'validation' };
+    const result = { success: false, output: '', error: 'No source code provided.', stage: 'validation' };
+    setCachedResult(cacheKey, result);
+    return { ...result, _tempDir: null };
   }
 
   const trimmed = sourceCode.trim();
   if (trimmed.length === 0) {
-    return { success: false, output: '', error: 'Source code is empty.', stage: 'validation' };
+    const result = { success: false, output: '', error: 'Source code is empty.', stage: 'validation' };
+    setCachedResult(cacheKey, result);
+    return { ...result, _tempDir: null };
   }
 
-  // ── 2. Java-specific: Determine filename/class name ────────────────────────
+  // ── 3. Java-specific: Determine filename/class name ────────────────────────
   let className = null;
   if (language === 'java') {
     // Priority 1: User-provided filename (if any)
@@ -444,12 +543,14 @@ async function compileAndRun(sourceCode, stdin = '', language = 'java', options 
 
       // "Input contains spaces or special characters → sanitize or reject"
       if (!/^[A-Za-z_$][A-Za-z\d_$]*$/.test(name)) {
-        return {
+        const result = {
           success: false,
           output : '',
           error  : 'Invalid Class Name. usage: letters, numbers, _, $',
           stage  : 'validation',
         };
+        setCachedResult(cacheKey, result);
+        return { ...result, _tempDir: null };
       }
       className = name;
     }
@@ -464,32 +565,37 @@ async function compileAndRun(sourceCode, stdin = '', language = 'java', options 
     }
   }
 
-  // ── 3. Isolated temp directory ─────────────────────────────────────────────
+  // ── 4. Isolated temp directory ─────────────────────────────────────────────
   const tempDir = path.join(TEMP_ROOT, `compiler_${language}_${uuidv4()}`);
+  await fs.promises.mkdir(tempDir, { recursive: true });
 
   try {
-    fs.mkdirSync(tempDir, { recursive: true });
-
+    let result;
     switch (language) {
-      case 'java'      : return await runJava(trimmed, stdin, tempDir, className);
-      case 'python'    : return await runPython(trimmed, stdin, tempDir);
-      case 'javascript': return await runJavaScript(trimmed, stdin, tempDir);
-      case 'typescript': return await runTypeScript(trimmed, stdin, tempDir);
-      case 'c'         : return await runC(trimmed, stdin, tempDir, strictWarnings);
-      case 'cpp'       : return await runCpp(trimmed, stdin, tempDir, strictWarnings);
+      case 'java'      : result = await runJava(trimmed, stdin, tempDir, className); break;
+      case 'python'    : result = await runPython(trimmed, stdin, tempDir); break;
+      case 'javascript': result = await runJavaScript(trimmed, stdin, tempDir); break;
+      case 'typescript': result = await runTypeScript(trimmed, stdin, tempDir); break;
+      case 'c'         : result = await runC(trimmed, stdin, tempDir, strictWarnings); break;
+      case 'cpp'       : result = await runCpp(trimmed, stdin, tempDir, strictWarnings); break;
       default:
-        return {
+        result = {
           success: false,
           output : '',
           error  : `Unsupported language: "${language}". Supported: ${SUPPORTED_LANGUAGES.join(', ')}.`,
           stage  : 'validation',
         };
     }
-  } finally {
-    // ── 4. Always clean up — even on unexpected throws ─────────────────────
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (_) { /* best-effort */ }
+
+    // Cache the result (without _tempDir)
+    setCachedResult(cacheKey, result);
+
+    // Attach tempDir for cleanup by caller
+    return { ...result, _tempDir: tempDir };
+  } catch (err) {
+    // On unexpected errors, clean up immediately (don't cache these)
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    throw err;
   }
 }
 

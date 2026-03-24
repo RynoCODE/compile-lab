@@ -39,3 +39,6 @@ docker-compose.override.yml
 
 # Temp files (compiler scratch dirs)
 /tmp/
+
+# Project docs
+SUGGESTIONS.md

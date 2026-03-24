@@ -38,10 +38,7 @@ const { v4: uuidv4 } = require('uuid');
 const COMPILE_TIMEOUT_MS = 10_000;  // javac / gcc / g++ / tsc get 10 s
 const RUN_TIMEOUT_MS     =  5_000;  // execution gets  5 s  (kills infinite loops)
 const MAX_OUTPUT_BYTES   = 100_000; // 100 KB combined stdout+stderr cap
-// Use RAM (/dev/shm) on Linux if available, else system temp
-const TEMP_ROOT = (process.platform === 'linux' && fs.existsSync('/dev/shm'))
-  ? '/dev/shm'
-  : os.tmpdir();
+const TEMP_ROOT = os.tmpdir();
 console.log(`[Compiler] Initialized. Using temp directory: ${TEMP_ROOT}`);
 
 const SUPPORTED_LANGUAGES = ['java', 'python', 'c', 'cpp', 'javascript', 'typescript'];
